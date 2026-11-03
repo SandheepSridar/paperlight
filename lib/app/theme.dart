@@ -39,14 +39,20 @@ extension PageThemeColors on PageTheme {
       };
 }
 
-const _seed = Color(0xFF8A5A2B);
+// Brand: Red Orange #F42902 dominates, Snowy White #FDFDFF is the quiet ground.
+const _seed = Color(0xFFF42902);
 
 ThemeData buildAppTheme(Brightness brightness) {
-  final scheme = ColorScheme.fromSeed(seedColor: _seed, brightness: brightness);
+  final scheme = ColorScheme.fromSeed(
+    seedColor: _seed,
+    brightness: brightness,
+    // Keep the primary colour close to the brand red instead of a muted tone.
+    dynamicSchemeVariant: DynamicSchemeVariant.fidelity,
+  );
   final base = ThemeData(colorScheme: scheme, useMaterial3: true);
   return base.copyWith(
     scaffoldBackgroundColor:
-        brightness == Brightness.dark ? Colors.black : const Color(0xFFFBF8F3),
+        brightness == Brightness.dark ? Colors.black : const Color(0xFFFDFDFF),
     textTheme: base.textTheme.apply(fontSizeFactor: 1.08),
     // Generous touch targets for a beginner.
     materialTapTargetSize: MaterialTapTargetSize.padded,

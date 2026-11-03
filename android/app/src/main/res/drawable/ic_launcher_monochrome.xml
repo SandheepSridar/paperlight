@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paperlight "P-page" mark (generated from the logo pack SVG). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <group android:pivotX="22" android:pivotY="23" android:scaleX="0.88" android:scaleY="0.88"
+        android:translateX="32" android:translateY="31">
+        <path android:fillType="evenOdd" android:fillColor="#000000" android:pathData="M4,0H26L38,12V21A13,13 0,0 1,25 34H15V48A4,4 0,0 1,11 52H4A4,4 0,0 1,0 48V4A4,4 0,0 1,4 0ZM17,17A7,7 0,1 0,31 17A7,7 0,1 0,17 17Z" />
+        <path android:fillColor="#000000" android:strokeColor="#000000" android:strokeWidth="3"
+            android:strokeLineJoin="round" android:pathData="M30.5,-4.5H42.5V7.5Z" />
+    </group>
+</vector>
