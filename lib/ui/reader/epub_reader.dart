@@ -33,6 +33,11 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
   String? _initialLocations;
   bool _loaded = false; // first page displayed
   bool _locationsReady = false;
+
+  /// False until the saved position has been restored. Until then any
+  /// relocation (e.g. the viewer briefly showing page 1) is NOT saved, so a
+  /// glitch during opening can never overwrite the reader's place.
+  bool _settled = false;
   String? _error;
 
   bool _chrome = false;
@@ -135,6 +140,23 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
     }
   }
 
+  /// The viewer reports "displayed" as soon as the first section draws.
+  /// The initial theme isn't reliably applied by then, so push it, let the
+  /// book reflow, and only then go to the saved position.
+  Future<void> _onFirstDisplay() async {
+    if (_loaded) return;
+    setState(() => _loaded = true);
+    await _applyTypography(force: true);
+    final saved = widget.book.location;
+    if (saved != null && saved.isNotEmpty) {
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
+      _controller.display(cfi: saved);
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+    }
+    _settled = true;
+  }
+
   void _onPrefs() {
     _session.apply();
     if (_loaded) _applyTypography();
@@ -155,6 +177,7 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
       // last known value rather than resetting the library's progress bar.
       if (_locationsReady || loc.progress > 0) _progress = loc.progress;
     });
+    if (!_settled) return;
     final cfi = loc.startCfi;
     final progress = _progress;
     _save.run(() => widget.repo
@@ -176,8 +199,10 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
     if (_chrome) {
       setState(() => _chrome = false);
     } else if (x < 0.3) {
+      _settled = true;
       _controller.prev();
     } else if (x > 0.7) {
+      _settled = true;
       _controller.next();
     } else {
       setState(() => _chrome = true);
@@ -216,7 +241,10 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
     void walk(List<EpubChapter> list, int depth) {
       for (final c in list) {
         entries.add(TocEntry(c.title.trim(), depth,
-            () => _controller.display(cfi: c.href)));
+            () {
+              _settled = true;
+              _controller.display(cfi: c.href);
+            }));
         walk(c.subitems, depth + 1);
       }
     }
@@ -252,13 +280,18 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
         bookmarked: _cfi != null && _marked.contains(_cfi),
         seekLabel: (v) => '${(v * 100).round()}%',
         onSeek: (v) {
-          if (_loaded) _controller.toProgressPercentage(v);
+          if (!_loaded) return;
+          _settled = true;
+          _controller.toProgressPercentage(v);
         },
         onBack: () => Navigator.pop(context),
         onContents: _contents,
         onBookmarks: () => showBookmarksSheet(context,
             load: () => widget.repo.bookmarks(widget.book.id),
-            onOpen: (b) => _controller.display(cfi: b.location),
+            onOpen: (b) {
+              _settled = true;
+              _controller.display(cfi: b.location);
+            },
             onDelete: (b) async {
               await widget.repo.deleteBookmark(b.id!);
               await _loadMarks();
@@ -295,12 +328,7 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
                             fontSize: _fontSize,
                             theme: _epubTheme(),
                           ),
-                          onEpubLoaded: () {
-                            setState(() => _loaded = true);
-                            // The initial theme isn't reliably applied by the
-                            // viewer on first load; push it once more.
-                            _applyTypography(force: true);
-                          },
+                          onEpubLoaded: _onFirstDisplay,
                           onLoadError: (e) => setState(() => _error = e.message),
                           onChaptersLoaded: (c) => _chapters = c,
                           onRelocated: _onRelocated,
