@@ -4,33 +4,72 @@ import '../../app/prefs.dart';
 import '../../app/theme.dart';
 import '../../data/models.dart';
 
-Future<void> showBookmarksSheet(
+/// "Notes & marks": bookmarks plus highlights, underlines, notes and ink.
+Future<void> showMarksSheet(
   BuildContext context, {
-  required Future<List<Bookmark>> Function() load,
-  required void Function(Bookmark) onOpen,
-  required Future<void> Function(Bookmark) onDelete,
+  required Future<List<Bookmark>> Function() loadBookmarks,
+  required void Function(Bookmark) onOpenBookmark,
+  required Future<void> Function(Bookmark) onDeleteBookmark,
+  required Future<List<Annotation>> Function() loadAnnotations,
+  required void Function(Annotation) onOpenAnnotation,
+  required Future<void> Function(Annotation) onDeleteAnnotation,
+  required bool isPdf,
+  int initialTab = 0,
 }) {
+  final h = MediaQuery.sizeOf(context).height;
   return showModalBottomSheet(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (c) => DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.6,
-      maxChildSize: 0.95,
-      builder: (c, scroll) => _BookmarkList(
-          scroll: scroll, load: load, onOpen: onOpen, onDelete: onDelete),
+    builder: (c) => SizedBox(
+      height: h * 0.72,
+      child: DefaultTabController(
+        length: 2,
+        initialIndex: initialTab,
+        child: Column(children: [
+          const TabBar(
+            labelStyle: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+            unselectedLabelStyle: TextStyle(fontSize: 17),
+            tabs: [
+              Tab(text: 'Highlights & notes'),
+              Tab(text: 'Bookmarks'),
+            ],
+          ),
+          Expanded(
+            child: TabBarView(children: [
+              _AnnotationList(
+                  load: loadAnnotations,
+                  onOpen: onOpenAnnotation,
+                  onDelete: onDeleteAnnotation,
+                  isPdf: isPdf),
+              _BookmarkList(
+                  load: loadBookmarks,
+                  onOpen: onOpenBookmark,
+                  onDelete: onDeleteBookmark),
+            ]),
+          ),
+        ]),
+      ),
     ),
   );
 }
 
+class _Empty extends StatelessWidget {
+  const _Empty(this.text);
+  final String text;
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text(text,
+              textAlign: TextAlign.center, style: const TextStyle(fontSize: 17)),
+        ),
+      );
+}
+
 class _BookmarkList extends StatefulWidget {
   const _BookmarkList(
-      {required this.scroll,
-      required this.load,
-      required this.onOpen,
-      required this.onDelete});
-  final ScrollController scroll;
+      {required this.load, required this.onOpen, required this.onDelete});
   final Future<List<Bookmark>> Function() load;
   final void Function(Bookmark) onOpen;
   final Future<void> Function(Bookmark) onDelete;
@@ -53,35 +92,14 @@ class _BookmarkListState extends State<_BookmarkList> {
     final items = _items;
     if (items == null) return const Center(child: CircularProgressIndicator());
     if (items.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(32),
-          child: Text(
-            'No bookmarks yet.\n\nTap the middle of the page, then the bookmark '
-            'button at the top to save your place.',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 17),
-          ),
-        ),
-      );
+      return const _Empty('No bookmarks yet.\n\nTap the middle of the page, then the '
+          'bookmark button at the top to save your place.');
     }
-    return ListView(controller: widget.scroll, children: [
-      const Padding(
-        padding: EdgeInsets.fromLTRB(24, 0, 24, 8),
-        child: Text('Bookmarks',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
-      ),
+    return ListView(children: [
       for (final b in items)
-        Dismissible(
-          key: ValueKey(b.id),
-          direction: DismissDirection.endToStart,
-          background: Container(
-            color: Theme.of(context).colorScheme.errorContainer,
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.only(right: 24),
-            child: const Icon(Icons.delete_outline_rounded),
-          ),
-          onDismissed: (_) async {
+        _Removable(
+          key: ValueKey('b${b.id}'),
+          onRemove: () async {
             await widget.onDelete(b);
             setState(() => items.remove(b));
           },
@@ -99,6 +117,123 @@ class _BookmarkListState extends State<_BookmarkList> {
         ),
     ]);
   }
+}
+
+class _AnnotationList extends StatefulWidget {
+  const _AnnotationList(
+      {required this.load,
+      required this.onOpen,
+      required this.onDelete,
+      required this.isPdf});
+  final Future<List<Annotation>> Function() load;
+  final void Function(Annotation) onOpen;
+  final Future<void> Function(Annotation) onDelete;
+  final bool isPdf;
+
+  @override
+  State<_AnnotationList> createState() => _AnnotationListState();
+}
+
+class _AnnotationListState extends State<_AnnotationList> {
+  List<Annotation>? _items;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.load().then((v) => mounted ? setState(() => _items = v) : null);
+  }
+
+  String _title(Annotation a) {
+    if (widget.isPdf) {
+      final what = switch (a.kind) {
+        AnnotationKind.ink => 'Drawing',
+        _ => 'Note',
+      };
+      return 'Page ${a.location} · $what';
+    }
+    final ex = (a.excerpt ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
+    return ex.isEmpty ? 'Highlight' : '“${ex.length > 140 ? '${ex.substring(0, 140)}…' : ex}”';
+  }
+
+  Widget _leading(Annotation a) {
+    final c = a.color == null ? null : Color(a.color!);
+    return switch (a.kind) {
+      AnnotationKind.underline => Icon(Icons.format_underlined_rounded, color: c),
+      AnnotationKind.ink => Icon(Icons.draw_rounded, color: c),
+      AnnotationKind.note => const Icon(Icons.sticky_note_2_outlined),
+      AnnotationKind.highlight => Container(
+          width: 22,
+          height: 22,
+          decoration: BoxDecoration(
+              color: c ?? Colors.yellow,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: Colors.black26)),
+        ),
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _items;
+    if (items == null) return const Center(child: CircularProgressIndicator());
+    if (items.isEmpty) {
+      return _Empty(widget.isPdf
+          ? 'No drawings or notes yet.\n\nWrite on the page with your S Pen, or tap '
+              'the pen button at the top to draw with your finger.'
+          : 'No highlights yet.\n\nPress and hold a word, drag to choose more text, '
+              'then pick a colour.');
+    }
+    return ListView(children: [
+      for (final a in items)
+        _Removable(
+          key: ValueKey('a${a.id}'),
+          onRemove: () async {
+            await widget.onDelete(a);
+            setState(() => items.remove(a));
+          },
+          child: ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+            minVerticalPadding: 14,
+            leading: SizedBox(width: 28, child: Center(child: _leading(a))),
+            title: Text(_title(a),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 17)),
+            subtitle: Text(
+              [
+                if (a.hasNote) a.note!.trim(),
+                '${(a.progress * 100).round()}% · swipe left to remove',
+              ].join('\n'),
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+            ),
+            onTap: () {
+              Navigator.pop(context);
+              widget.onOpen(a);
+            },
+          ),
+        ),
+    ]);
+  }
+}
+
+class _Removable extends StatelessWidget {
+  const _Removable({super.key, required this.onRemove, required this.child});
+  final Future<void> Function() onRemove;
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => Dismissible(
+        key: key!,
+        direction: DismissDirection.endToStart,
+        background: Container(
+          color: Theme.of(context).colorScheme.errorContainer,
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.only(right: 24),
+          child: const Icon(Icons.delete_outline_rounded),
+        ),
+        onDismissed: (_) => onRemove(),
+        child: child,
+      );
 }
 
 /// The "Aa" sheet. [isEpub] controls whether text options are shown —

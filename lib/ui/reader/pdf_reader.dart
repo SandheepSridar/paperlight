@@ -5,6 +5,10 @@ import '../../app/prefs.dart';
 import '../../app/theme.dart';
 import '../../data/library_repo.dart';
 import '../../data/models.dart';
+import 'annotation_menus.dart';
+import 'ink/ink_controller.dart';
+import 'ink/ink_layer.dart';
+import 'ink/ink_toolbar.dart';
 import 'reader_chrome.dart';
 import 'reader_session.dart';
 import 'reader_sheets.dart';
@@ -41,6 +45,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   PdfMode? _mode;
 
+  // Ink and page notes.
+  late final InkController _ink =
+      InkController(repo: widget.repo, bookId: widget.book.id);
+  bool get _penMode => _ink.penMode;
+
   int get _count => _doc?.pages.length ?? 1;
   double get _progress => _count <= 1 ? 1 : (_page - 1) / (_count - 1);
 
@@ -49,11 +58,13 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     super.initState();
     _session.begin();
     widget.prefs.addListener(_onPrefs);
-    _life = AppLifecycleListener(onPause: _save.flush, onHide: _save.flush);
+    _life = AppLifecycleListener(onPause: _flushAll, onHide: _flushAll);
     widget.repo.markOpened(widget.book.id);
     _loadMarks();
+    _ink.load();
     PdfDocument.openFile(widget.book.path).then((d) {
       if (!mounted) return d.dispose();
+      _ink.pageCount = d.pages.length;
       setState(() {
         _doc = d;
         _page = _page.clamp(1, d.pages.length);
@@ -61,9 +72,16 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     }, onError: (e) => mounted ? setState(() => _error = e) : null);
   }
 
+  void _flushAll() {
+    _save.flush();
+    _ink.flush();
+  }
+
   @override
   void dispose() {
     _save.flush();
+    final ink = _ink;
+    ink.flush().whenComplete(ink.dispose);
     _life.dispose();
     widget.prefs.removeListener(_onPrefs);
     _session.end();
@@ -111,6 +129,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   /// Left third = back, right third = forward, middle = show/hide controls.
   void _onTap(TapUpDetails d) {
+    if (_penMode || _ink.stylusBusy.value) return;
     final w = context.size?.width ?? 1;
     final x = d.localPosition.dx / w;
     if (_chrome) {
@@ -162,10 +181,61 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     if (mounted) await showContentsSheet(context, entries);
   }
 
+  void _startPen() {
+    if (widget.prefs.pdfMode != PdfMode.pages) {
+      widget.prefs.pdfMode = PdfMode.pages;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Switched to "Turn pages" so you can draw on the page.')));
+    }
+    _zoom.value = Matrix4.identity();
+    _ink.penMode = true;
+    setState(() {
+      _zoomed = false;
+      _chrome = false;
+    });
+  }
+
+  void _endPen() {
+    _ink.penMode = false;
+    _ink.flush();
+    setState(() {});
+  }
+
+  Future<void> _editPageNote(int page) async {
+    final existing = _ink.notes[page];
+    final text = await showNoteDialog(context,
+        initial: existing?.note,
+        title: existing == null ? 'Note for page $page' : 'Page $page note');
+    if (text == null) return;
+    await _ink.saveNote(page, text);
+  }
+
+  void _openMarks() {
+    showMarksSheet(context,
+        isPdf: true,
+        loadBookmarks: () => widget.repo.bookmarks(widget.book.id),
+        onOpenBookmark: (b) => _goTo(int.parse(b.location)),
+        onDeleteBookmark: (b) async {
+          await widget.repo.deleteBookmark(b.id!);
+          await _loadMarks();
+        },
+        loadAnnotations: () async {
+          await _ink.flush();
+          return widget.repo.annotations(widget.book.id);
+        },
+        onOpenAnnotation: (a) => _goTo(int.tryParse(a.location) ?? _page),
+        onDeleteAnnotation: (a) async {
+          await widget.repo.deleteAnnotation(a.id!);
+          _ink.forget(a);
+        });
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = widget.prefs.theme;
     return Scaffold(
+      // The keyboard (for notes) must not shrink and reflow the page.
+      resizeToAvoidBottomInset: false,
         backgroundColor: theme.background,
         body: ReaderChrome(
           visible: _chrome,
@@ -179,17 +249,31 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           onSeek: (v) => _goTo((v * (_count - 1)).round() + 1),
           onBack: () => Navigator.pop(context),
           onContents: _contents,
-          onBookmarks: () => showBookmarksSheet(context,
-              load: () => widget.repo.bookmarks(widget.book.id),
-              onOpen: (b) => _goTo(int.parse(b.location)),
-              onDelete: (b) async {
-                await widget.repo.deleteBookmark(b.id!);
-                await _loadMarks();
-              }),
+          onBookmarks: _openMarks,
+          onPen: _doc == null ? null : _startPen,
           onToggleBookmark: _toggleBookmark,
           onSettings: () =>
               showDisplaySheet(context, prefs: widget.prefs, isEpub: false),
-          child: _body(theme),
+          child: Stack(children: [
+            Positioned.fill(child: _body(theme)),
+            if (_penMode)
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: 16 + MediaQuery.paddingOf(context).bottom,
+                child: Center(
+                  child: InkToolbar(
+                    controller: _ink,
+                    page: _page,
+                    pageCount: _count,
+                    onPrev: () => _turn(-1),
+                    onNext: () => _turn(1),
+                    onNote: () => _editPageNote(_page),
+                    onDone: _endPen,
+                  ),
+                ),
+              ),
+          ]),
         ),
     );
   }
@@ -212,67 +296,94 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _zoomed = false;
     }
 
-    // The page is rendered white, then the theme's colour filter turns white
+    // Pages are rendered white, then the theme's colour filter turns white
     // into paper / night colours — one cheap GPU pass, no re-rendering.
+    // Ink is drawn outside the filter so it keeps its true colours.
     final filter = theme.pdfFilter;
-    // The white backdrop must be inside the filter, or the margins around
-    // the page stay bright white in Night mode.
-    Widget content = ColoredBox(
-      color: Colors.white,
-      child: mode == PdfMode.pages ? _pageMode(doc) : _scrollMode(),
-    );
-    if (filter != null) content = ColorFiltered(colorFilter: filter, child: content);
-    return content;
+    final night = theme == PageTheme.dark;
+    if (mode == PdfMode.scroll) return _scrollMode(theme, filter, night);
+    Widget backdrop = const ColoredBox(color: Colors.white);
+    if (filter != null) backdrop = ColorFiltered(colorFilter: filter, child: backdrop);
+    return Stack(children: [
+      Positioned.fill(child: backdrop),
+      Positioned.fill(child: _pageMode(doc, filter, night)),
+    ]);
   }
 
-  Widget _pageMode(PdfDocument doc) {
+  Widget _pageMode(PdfDocument doc, ColorFilter? filter, bool night) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTapUp: _onTap,
-      child: PageView.builder(
-        controller: _pages,
-        // Keeps the neighbouring page rendered so page turns are instant,
-        // without rendering the whole book.
-        allowImplicitScrolling: true,
-        physics: _zoomed
-            ? const NeverScrollableScrollPhysics()
-            : const PageScrollPhysics(),
-        itemCount: doc.pages.length,
-        onPageChanged: (i) {
-          _zoom.value = Matrix4.identity();
-          _zoomed = false;
-          _onPage(i + 1);
-        },
-        itemBuilder: (c, i) {
-          final page = PdfPageView(
-            document: doc,
-            pageNumber: i + 1,
-            maximumDpi: 220,
-            backgroundColor: Colors.white,
-          );
-          if (i != _page - 1) return page;
-          return InteractiveViewer(
-            transformationController: _zoom,
-            minScale: 1,
-            maxScale: 5,
-            onInteractionEnd: (_) {
-              final z = _zoom.value.getMaxScaleOnAxis() > 1.02;
-              if (z != _zoomed) setState(() => _zoomed = z);
-            },
-            child: page,
-          );
-        },
+      child: ValueListenableBuilder<bool>(
+        valueListenable: _ink.stylusBusy,
+        builder: (context, stylusBusy, _) => PageView.builder(
+          controller: _pages,
+          // Keeps the neighbouring page rendered so page turns are instant,
+          // without rendering the whole book.
+          allowImplicitScrolling: true,
+          // No swiping while zoomed, while drawing with a finger, or while
+          // the S Pen is on the glass (a resting palm must not turn pages).
+          physics: _zoomed || _penMode || stylusBusy
+              ? const NeverScrollableScrollPhysics()
+              : const PageScrollPhysics(),
+          itemCount: doc.pages.length,
+          onPageChanged: (i) {
+            _zoom.value = Matrix4.identity();
+            _zoomed = false;
+            _onPage(i + 1);
+          },
+          itemBuilder: (c, i) {
+            final page = _pageWithInk(doc, i + 1, filter, night);
+            if (i != _page - 1) return page;
+            return InteractiveViewer(
+              transformationController: _zoom,
+              minScale: 1,
+              maxScale: 5,
+              panEnabled: !_penMode,
+              scaleEnabled: !_penMode,
+              onInteractionEnd: (_) {
+                final z = _zoom.value.getMaxScaleOnAxis() > 1.02;
+                if (z != _zoomed) setState(() => _zoomed = z);
+              },
+              child: page,
+            );
+          },
+        ),
       ),
     );
   }
 
-  Widget _scrollMode() {
+  /// The page image with its ink layer on top, sized exactly to the page so
+  /// strokes line up (and zoom) with the text underneath.
+  Widget _pageWithInk(PdfDocument doc, int number, ColorFilter? filter, bool night) {
+    final pg = doc.pages[number - 1];
+    Widget image = PdfPageView(
+      document: doc,
+      pageNumber: number,
+      maximumDpi: 220,
+      backgroundColor: Colors.white,
+    );
+    if (filter != null) image = ColorFiltered(colorFilter: filter, child: image);
+    return Center(
+      child: AspectRatio(
+        aspectRatio: pg.width / pg.height,
+        child: Stack(fit: StackFit.expand, children: [
+          image,
+          InkLayer(page: number, controller: _ink, night: night),
+          _NoteBadge(ink: _ink, page: number, onTap: () => _editPageNote(number)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _scrollMode(PageTheme theme, ColorFilter? filter, bool night) {
     return PdfViewer.file(
       widget.book.path,
       controller: _viewer,
       initialPageNumber: _page,
       params: PdfViewerParams(
-        backgroundColor: Colors.white,
+        backgroundColor: filter == null ? Colors.white : theme.background,
+        pageImageColorFilter: filter,
         margin: 6,
         pageDropShadow: null,
         onPageChanged: (n) => n == null ? null : _onPage(n),
@@ -281,9 +392,52 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           setState(() => _chrome = !_chrome);
           return true;
         },
+        pageOverlaysBuilder: (ctx, rect, page) => [
+          Positioned.fill(
+            child: InkLayer(
+                page: page.pageNumber,
+                controller: _ink,
+                night: night,
+                interactive: false),
+          ),
+          _NoteBadge(
+              ink: _ink,
+              page: page.pageNumber,
+              onTap: () => _editPageNote(page.pageNumber)),
+        ],
       ),
     );
   }
+}
+
+/// A small sticky-note button on pages that have a note.
+class _NoteBadge extends StatelessWidget {
+  const _NoteBadge({required this.ink, required this.page, required this.onTap});
+  final InkController ink;
+  final int page;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: ink,
+        builder: (context, _) {
+          if (ink.notes[page] == null) return const SizedBox.shrink();
+          return Positioned(
+            top: 6,
+            right: 6,
+            child: Material(
+              color: const Color(0xFFFFD54F),
+              shape: const CircleBorder(),
+              elevation: 3,
+              child: IconButton(
+                tooltip: 'Page note',
+                onPressed: onTap,
+                icon: const Icon(Icons.sticky_note_2_rounded, color: Colors.black87),
+              ),
+            ),
+          );
+        },
+      );
 }
 
 class _Message extends StatelessWidget {

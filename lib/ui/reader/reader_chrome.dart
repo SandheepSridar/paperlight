@@ -22,6 +22,7 @@ class ReaderChrome extends StatelessWidget {
     required this.child,
     this.seekDivisions,
     this.seekLabel,
+    this.onPen,
   });
 
   final bool visible;
@@ -38,6 +39,9 @@ class ReaderChrome extends StatelessWidget {
   final ValueChanged<double> onSeek;
   final int? seekDivisions;
   final String Function(double)? seekLabel;
+
+  /// PDF only: opens the drawing toolbar.
+  final VoidCallback? onPen;
   final Widget child;
 
   @override
@@ -99,9 +103,14 @@ class ReaderChrome extends StatelessWidget {
                       icon: const Icon(Icons.toc_rounded),
                       onPressed: onContents),
                   IconButton(
-                      tooltip: 'Bookmarks',
+                      tooltip: 'Notes & marks',
                       icon: const Icon(Icons.bookmarks_outlined),
                       onPressed: onBookmarks),
+                  if (onPen != null)
+                    IconButton(
+                        tooltip: 'Draw on the page',
+                        icon: const Icon(Icons.edit_outlined),
+                        onPressed: onPen),
                   IconButton(
                       tooltip: bookmarked ? 'Remove bookmark' : 'Bookmark this page',
                       icon: Icon(bookmarked

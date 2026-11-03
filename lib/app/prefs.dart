@@ -71,8 +71,8 @@ class ReaderPrefs extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool get seenReaderTip => _sp.getBool('seenReaderTip') ?? false;
-  set seenReaderTip(bool v) => _sp.setBool('seenReaderTip', v);
+  bool get seenReaderTip => _sp.getBool('seenReaderTip_v1_1') ?? false;
+  set seenReaderTip(bool v) => _sp.setBool('seenReaderTip_v1_1', v);
 
   DateTime? get lastUpdateCheck {
     final ms = _sp.getInt('lastUpdateCheck');

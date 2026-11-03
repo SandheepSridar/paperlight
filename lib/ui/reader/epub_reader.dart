@@ -1,12 +1,15 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_epub_viewer/flutter_epub_viewer.dart';
 
 import '../../app/prefs.dart';
 import '../../app/theme.dart';
 import '../../data/library_repo.dart';
 import '../../data/models.dart';
+import 'annotation_menus.dart';
 import 'reader_chrome.dart';
 import 'reader_session.dart';
 import 'reader_sheets.dart';
@@ -53,7 +56,17 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
 
   // Tap detection: epub.js reports raw touches; a short, still touch is a tap.
   Offset? _down;
+  Offset? _lastTouch;
   DateTime? _downAt;
+
+  // Highlights / underlines / notes.
+  List<Annotation> _annotations = [];
+  _Menu? _menu;
+  bool _marksApplied = false;
+  Timer? _pendingTap;
+  DateTime? _markTapAt;
+  final _stackKey = GlobalKey();
+  final _viewerKey = GlobalKey();
 
   @override
   void initState() {
@@ -63,6 +76,11 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
     _life = AppLifecycleListener(onPause: _save.flush, onHide: _save.flush);
     widget.repo.markOpened(widget.book.id);
     _loadMarks();
+    widget.repo.annotations(widget.book.id).then((a) {
+      if (!mounted) return;
+      _annotations = a;
+      if (_settled) _applyMarks();
+    });
     widget.repo.epubLocations(widget.book.id).then((l) {
       if (mounted) setState(() => (_initialLocations = l, _ready = true));
     });
@@ -71,6 +89,7 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
   @override
   void dispose() {
     _save.flush();
+    _pendingTap?.cancel();
     _life.dispose();
     widget.prefs.removeListener(_onPrefs);
     _session.end();
@@ -155,6 +174,192 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
       await Future<void>.delayed(const Duration(milliseconds: 700));
     }
     _settled = true;
+    _applyMarks();
+  }
+
+  // ---------------------------------------------------------------- marks
+
+  /// Draws every saved highlight / underline once the book is on screen.
+  /// epub.js keeps them and re-draws them as pages are turned.
+  void _applyMarks() {
+    if (_marksApplied || !_loaded) return;
+    _marksApplied = true;
+    for (final a in _annotations) {
+      _draw(a);
+    }
+  }
+
+  void _draw(Annotation a) {
+    try {
+      if (a.kind == AnnotationKind.underline) {
+        _controller.addUnderline(cfi: a.location, color: underlineColor);
+      } else if (a.kind == AnnotationKind.highlight) {
+        _controller.addHighlight(
+            cfi: a.location,
+            color: Color(a.color ?? highlightColors.first.toARGB32()),
+            opacity: 0.35);
+      }
+    } catch (_) {}
+  }
+
+  void _erase(Annotation a) {
+    try {
+      if (a.kind == AnnotationKind.underline) {
+        _controller.removeUnderline(cfi: a.location);
+      } else {
+        _controller.removeHighlight(cfi: a.location);
+      }
+    } catch (_) {}
+  }
+
+  /// Converts a rect relative to the web view into Stack coordinates.
+  Rect _toStack(Rect r) {
+    final viewer = _viewerKey.currentContext?.findRenderObject() as RenderBox?;
+    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    if (viewer == null || stack == null) return r;
+    final o = stack.globalToLocal(viewer.localToGlobal(Offset.zero));
+    return r.shift(o);
+  }
+
+  Size get _viewerSize =>
+      (_viewerKey.currentContext?.findRenderObject() as RenderBox?)?.size ??
+      Size.zero;
+
+  void _onSelection(String text, String cfi, Rect rect, Rect _) {
+    if (text.trim().isEmpty) return;
+    setState(() {
+      _chrome = false;
+      _menu = _Menu(anchor: _toStack(rect), cfi: cfi, text: text);
+    });
+  }
+
+  void _onAnnotationClicked(String cfi, Map<String, dynamic>? rect) {
+    _markTapAt = DateTime.now();
+    _pendingTap?.cancel();
+    final a = _annotations.where((x) => x.location == cfi).firstOrNull;
+    if (a == null) return;
+    final size = _viewerSize;
+    double v(String k) => (rect?[k] as num?)?.toDouble() ?? 0;
+    // The viewer's rect for a tapped mark is often empty (all zeros), so
+    // anchor the menu where the finger touched instead.
+    final touch = _lastTouch;
+    final Rect anchor;
+    if (v('right') > v('left') && v('bottom') > v('top')) {
+      anchor = _toStack(Rect.fromLTRB(v('left'), v('top'), v('right'), v('bottom')));
+    } else if (touch != null) {
+      anchor = _toStack(Rect.fromCenter(
+          center: Offset(touch.dx * size.width, touch.dy * size.height),
+          width: 40,
+          height: 40));
+    } else {
+      anchor = _toStack(Rect.fromCenter(
+          center: size.center(Offset.zero), width: 10, height: 10));
+    }
+    setState(() {
+      _chrome = false;
+      _menu = _Menu(anchor: anchor, cfi: cfi, text: a.excerpt ?? '', mark: a);
+    });
+  }
+
+  void _closeMenu({bool clear = true}) {
+    if (_menu == null) return;
+    final wasSelection = _menu!.mark == null;
+    setState(() => _menu = null);
+    if (clear && wasSelection) {
+      try {
+        _controller.clearSelection();
+      } catch (_) {}
+    }
+  }
+
+  Annotation _newMark(_Menu m, AnnotationKind kind, Color color, {String? note}) =>
+      Annotation(
+        bookId: widget.book.id,
+        kind: kind,
+        location: m.cfi,
+        progress: _progress,
+        createdAt: DateTime.now(),
+        color: color.toARGB32(),
+        excerpt: m.text,
+        note: note,
+      );
+
+  Future<void> _addMark(Annotation a) async {
+    // Re-marking the exact same text replaces the old mark.
+    for (final old in _annotations.where((x) => x.location == a.location).toList()) {
+      _erase(old);
+      await widget.repo.deleteAnnotation(old.id!);
+      _annotations.remove(old);
+    }
+    final saved = await widget.repo.saveAnnotation(a);
+    _annotations.add(saved);
+    _draw(saved);
+  }
+
+  Future<void> _highlight(Color c) async {
+    final m = _menu;
+    if (m == null) return;
+    _closeMenu();
+    final mark = m.mark;
+    if (mark != null) {
+      // Change colour of an existing highlight.
+      _erase(mark);
+      final updated = await widget.repo.saveAnnotation(mark.copyWith(color: c.toARGB32()));
+      _annotations[_annotations.indexOf(mark)] = updated;
+      _draw(updated);
+    } else {
+      await _addMark(_newMark(m, AnnotationKind.highlight, c));
+    }
+  }
+
+  Future<void> _underline() async {
+    final m = _menu;
+    if (m == null) return;
+    _closeMenu();
+    await _addMark(_newMark(m, AnnotationKind.underline, underlineColor));
+  }
+
+  Future<void> _note() async {
+    final m = _menu;
+    if (m == null) return;
+    _closeMenu();
+    final mark = m.mark;
+    final text = await showNoteDialog(context,
+        initial: mark?.note, excerpt: m.text, title: mark?.hasNote == true ? 'Edit note' : 'Add a note');
+    if (text == null || !mounted) return;
+    if (mark != null) {
+      final updated = await widget.repo.saveAnnotation(mark.copyWith(note: text));
+      _annotations[_annotations.indexOf(mark)] = updated;
+    } else if (text.isNotEmpty) {
+      // A note always comes with a highlight, so it can be found on the page.
+      await _addMark(_newMark(m, AnnotationKind.highlight, highlightColors.first, note: text));
+    }
+  }
+
+  Future<void> _copy() async {
+    final m = _menu;
+    if (m == null) return;
+    _closeMenu();
+    await Clipboard.setData(ClipboardData(text: m.text));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Copied'), duration: Duration(seconds: 1)));
+    }
+  }
+
+  Future<void> _remove() async {
+    final mark = _menu?.mark;
+    if (mark == null) return;
+    _closeMenu();
+    final what = mark.kind == AnnotationKind.underline ? 'underline' : 'highlight';
+    if (!await confirmRemove(context, mark.hasNote ? '$what and its note' : what)) return;
+    await _deleteMark(mark);
+  }
+
+  Future<void> _deleteMark(Annotation a) async {
+    _erase(a);
+    await widget.repo.deleteAnnotation(a.id!);
+    _annotations.removeWhere((x) => x.id == a.id);
   }
 
   void _onPrefs() {
@@ -170,6 +375,7 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
 
   void _onRelocated(EpubLocation loc) {
     setState(() {
+      _menu = null; // a turned page leaves the old selection behind
       _cfi = loc.startCfi;
       _chapterPage = loc.chapterPage;
       _chapterPages = loc.chapterTotalPages;
@@ -186,6 +392,7 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
 
   void _touchDown(double x, double y) {
     _down = Offset(x, y);
+    _lastTouch = _down;
     _downAt = DateTime.now();
   }
 
@@ -196,6 +403,26 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
     final still = (Offset(x, y) - d).distance < 0.03;
     final quick = DateTime.now().difference(at) < const Duration(milliseconds: 350);
     if (!still || !quick) return; // swipe (handled by epub.js) or long-press select
+    final markTap = _markTapAt;
+    if (markTap != null &&
+        DateTime.now().difference(markTap) < const Duration(milliseconds: 600)) {
+      return; // tapped a highlight: its menu is showing
+    }
+    if (_menu != null) {
+      _closeMenu();
+      return;
+    }
+    if (_annotations.isEmpty) {
+      _tap(x);
+    } else {
+      // Give a tap on a highlight a moment to arrive before turning the page.
+      _pendingTap?.cancel();
+      _pendingTap = Timer(const Duration(milliseconds: 220), () => _tap(x));
+    }
+  }
+
+  void _tap(double x) {
+    if (!mounted) return;
     if (_chrome) {
       setState(() => _chrome = false);
     } else if (x < 0.3) {
@@ -270,6 +497,8 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
     final p = widget.prefs;
     final theme = p.theme;
     return Scaffold(
+      // The keyboard (for notes) must not shrink and reflow the page.
+      resizeToAvoidBottomInset: false,
       backgroundColor: theme.background,
       body: ReaderChrome(
         visible: _chrome,
@@ -286,16 +515,24 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
         },
         onBack: () => Navigator.pop(context),
         onContents: _contents,
-        onBookmarks: () => showBookmarksSheet(context,
-            load: () => widget.repo.bookmarks(widget.book.id),
-            onOpen: (b) {
+        onBookmarks: () => showMarksSheet(context,
+            isPdf: false,
+            loadBookmarks: () => widget.repo.bookmarks(widget.book.id),
+            onOpenBookmark: (b) {
               _settled = true;
               _controller.display(cfi: b.location);
             },
-            onDelete: (b) async {
+            onDeleteBookmark: (b) async {
               await widget.repo.deleteBookmark(b.id!);
               await _loadMarks();
-            }),
+            },
+            loadAnnotations: () async => List.of(_annotations)
+              ..sort((a, b) => a.progress.compareTo(b.progress)),
+            onOpenAnnotation: (a) {
+              _settled = true;
+              _controller.display(cfi: a.location);
+            },
+            onDeleteAnnotation: _deleteMark),
         onToggleBookmark: _toggleBookmark,
         onSettings: () => showDisplaySheet(context, prefs: p, isEpub: true),
         child: _error != null
@@ -311,12 +548,13 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
               )
             : !_ready
                 ? const Center(child: CircularProgressIndicator())
-                : Stack(children: [
+                : Stack(key: _stackKey, children: [
                     SafeArea(
                       child: AnimatedPadding(
                         duration: const Duration(milliseconds: 150),
                         padding: EdgeInsets.fromLTRB(p.margin, 20, p.margin, 28),
                         child: EpubViewer(
+                          key: _viewerKey,
                           epubController: _controller,
                           epubSource: _source,
                           initialCfi: widget.book.location,
@@ -337,9 +575,47 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
                               widget.repo.saveEpubLocations(widget.book.id, l),
                           onTouchDown: _touchDown,
                           onTouchUp: _touchUp,
+                          suppressNativeContextMenu: true,
+                          onSelection: _onSelection,
+                          onSelectionChanging: () {
+                            if (_menu?.mark == null && _menu != null) {
+                              setState(() => _menu = null);
+                            }
+                          },
+                          onDeselection: () {
+                            if (_menu?.mark == null && _menu != null) {
+                              setState(() => _menu = null);
+                            }
+                          },
+                          onAnnotationClicked: _onAnnotationClicked,
                         ),
                       ),
                     ),
+                    if (_menu case final m?)
+                      Positioned.fill(
+                        child: AnchoredMenu(
+                          anchor: m.anchor,
+                          child: m.mark == null
+                              ? MarkMenu(
+                                  onColor: _highlight,
+                                  onUnderline: _underline,
+                                  onNote: _note,
+                                  onCopy: _copy,
+                                )
+                              : MarkMenu(
+                                  onColor: m.mark!.kind == AnnotationKind.highlight
+                                      ? _highlight
+                                      : null,
+                                  selectedColor: m.mark!.color == null
+                                      ? null
+                                      : Color(m.mark!.color!),
+                                  onNote: _note,
+                                  noteLabel: m.mark!.hasNote ? 'Edit note' : 'Note',
+                                  onCopy: _copy,
+                                  onRemove: _remove,
+                                ),
+                        ),
+                      ),
                     if (!_loaded)
                       Positioned.fill(
                         child: ColoredBox(
@@ -351,4 +627,13 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
       ),
     );
   }
+}
+
+/// The pop-up menu's target: a fresh selection, or an existing [mark].
+class _Menu {
+  _Menu({required this.anchor, required this.cfi, required this.text, this.mark});
+  final Rect anchor;
+  final String cfi;
+  final String text;
+  final Annotation? mark;
 }

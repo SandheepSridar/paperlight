@@ -84,6 +84,61 @@ class LibraryRepo extends ChangeNotifier {
 
   Future<void> deleteBookmark(int id) =>
       _db.delete('bookmarks', where: 'id = ?', whereArgs: [id]);
+
+  /// All highlights / underlines / notes / ink for a book, in reading order.
+  Future<List<Annotation>> annotations(String bookId) async {
+    final rows = await _db.query('annotations',
+        where: 'book_id = ?',
+        whereArgs: [bookId],
+        orderBy: 'progress ASC, created_at ASC');
+    return rows.map(Annotation.fromRow).toList();
+  }
+
+  /// Inserts or updates; returns the annotation with its id.
+  Future<Annotation> saveAnnotation(Annotation a) async {
+    if (a.id == null) {
+      final id = await _db.insert('annotations', a.toRow());
+      return a.copyWith(id: id, updatedAt: a.updatedAt);
+    }
+    await _db.update('annotations', a.toRow(),
+        where: 'id = ?', whereArgs: [a.id]);
+    return a;
+  }
+
+  Future<void> deleteAnnotation(int id) =>
+      _db.delete('annotations', where: 'id = ?', whereArgs: [id]);
+
+  /// The single ink row for a PDF page, if any.
+  Future<Annotation?> inkForPage(String bookId, int page) async {
+    final rows = await _db.query('annotations',
+        where: 'book_id = ? AND kind = ? AND location = ?',
+        whereArgs: [bookId, AnnotationKind.ink.name, '$page'],
+        limit: 1);
+    return rows.isEmpty ? null : Annotation.fromRow(rows.first);
+  }
+
+  /// Saves the strokes of a PDF page (deletes the row when empty).
+  Future<Annotation?> saveInk(String bookId, int page, int pageCount,
+      List<InkStroke> strokes, {Annotation? existing}) async {
+    final row = existing ?? await inkForPage(bookId, page);
+    if (strokes.isEmpty) {
+      if (row?.id != null) await deleteAnnotation(row!.id!);
+      return null;
+    }
+    final data = InkStroke.encodeAll(strokes);
+    if (row == null) {
+      final now = DateTime.now();
+      return saveAnnotation(Annotation(
+        bookId: bookId,
+        kind: AnnotationKind.ink,
+        location: '$page',
+        progress: pageCount <= 1 ? 0 : (page - 1) / (pageCount - 1),
+        createdAt: now,
+        data: data,
+      ));
+    }
+    return saveAnnotation(row.copyWith(data: data));
+  }
 }
 
 /// Calls [action] at most once per [delay], always with the latest value —

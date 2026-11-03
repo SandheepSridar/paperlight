@@ -407,7 +407,9 @@ Future<void> showReaderTip(BuildContext context) => showDialog(
           _TipRow(Icons.touch_app_rounded, 'Tap the right side (or swipe left) for the next page.'),
           _TipRow(Icons.undo_rounded, 'Tap the left side to go back a page.'),
           _TipRow(Icons.menu_rounded, 'Tap the middle to show the menu: text size, colours, bookmarks and contents.'),
-          _TipRow(Icons.save_rounded, 'Your place is saved automatically.'),
+          _TipRow(Icons.border_color_rounded, 'Books: press and hold a word, drag to choose more, then pick a colour to highlight or add a note.'),
+          _TipRow(Icons.draw_rounded, 'PDFs: write on the page with your S Pen, or tap the pen button in the menu to draw with your finger.'),
+          _TipRow(Icons.save_rounded, 'Your place and your marks are saved automatically.'),
         ]),
         actions: [
           FilledButton(onPressed: () => Navigator.pop(c), child: const Text('Got it')),
