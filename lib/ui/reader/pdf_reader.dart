@@ -215,9 +215,14 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     // The page is rendered white, then the theme's colour filter turns white
     // into paper / night colours — one cheap GPU pass, no re-rendering.
     final filter = theme.pdfFilter;
-    Widget content = mode == PdfMode.pages ? _pageMode(doc) : _scrollMode();
+    // The white backdrop must be inside the filter, or the margins around
+    // the page stay bright white in Night mode.
+    Widget content = ColoredBox(
+      color: Colors.white,
+      child: mode == PdfMode.pages ? _pageMode(doc) : _scrollMode(),
+    );
     if (filter != null) content = ColorFiltered(colorFilter: filter, child: content);
-    return ColoredBox(color: Colors.white, child: content);
+    return content;
   }
 
   Widget _pageMode(PdfDocument doc) {
