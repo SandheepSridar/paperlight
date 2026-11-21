@@ -9,6 +9,7 @@ import '../../app/prefs.dart';
 import '../../app/theme.dart';
 import '../../data/library_repo.dart';
 import '../../data/models.dart';
+import '../../tts/narration.dart' show locateSnippet;
 import '../../tts/read_aloud_controller.dart';
 import 'annotation_menus.dart';
 import 'read_aloud_bar.dart';
@@ -367,6 +368,19 @@ class _EpubReaderScreenState extends State<EpubReaderScreen>
     }
   }
 
+  /// Reads aloud from the sentence containing the selected words.
+  Future<void> _readFromHere() async {
+    final m = _menu;
+    if (m == null) return;
+    _closeMenu();
+    setState(() => _chrome = false);
+    int? at;
+    try {
+      at = locateSnippet(await _controller.extractCurrentPageSpeechText(), m.text);
+    } catch (_) {}
+    if (mounted) await startReadAloud(fromOffset: at);
+  }
+
   Future<void> _remove() async {
     final mark = _menu?.mark;
     if (mark == null) return;
@@ -649,6 +663,7 @@ class _EpubReaderScreenState extends State<EpubReaderScreen>
                                   onUnderline: _underline,
                                   onNote: _note,
                                   onCopy: _copy,
+                                  onReadAloud: _readFromHere,
                                 )
                               : MarkMenu(
                                   onColor: m.mark!.kind == AnnotationKind.highlight
@@ -661,6 +676,7 @@ class _EpubReaderScreenState extends State<EpubReaderScreen>
                                   noteLabel: m.mark!.hasNote ? 'Edit note' : 'Note',
                                   onCopy: _copy,
                                   onRemove: _remove,
+                                  onReadAloud: _readFromHere,
                                 ),
                         ),
                       ),
@@ -686,16 +702,17 @@ class _EpubNarration implements NarrationSource {
 
   @override
   bool get pdf => false;
-  @override
-  bool get canPeek => false;
 
   @override
   Future<String?> pageText(int ahead) async {
-    if (ahead != 0 || !s.mounted || !s._loaded) return null;
+    if (!s.mounted || !s._loaded) return null;
+    // Earlier pages, and pages in the next chapter, can't be read ahead.
+    if (ahead < 0) return NarrationSource.notYet;
     try {
-      return await s._controller.extractCurrentPageSpeechText();
+      if (ahead == 0) return await s._controller.extractCurrentPageSpeechText();
+      return await s._controller.extractPageSpeechText(ahead) ?? NarrationSource.notYet;
     } catch (_) {
-      return '';
+      return ahead == 0 ? '' : NarrationSource.notYet;
     }
   }
 

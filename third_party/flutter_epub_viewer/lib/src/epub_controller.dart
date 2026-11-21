@@ -209,6 +209,14 @@ class EpubController {
     return result is String ? result : '';
   }
 
+  /// Paperlight: speech text of the page [ahead] pages after the current one
+  /// in the same chapter, without turning to it. Null when that page is in
+  /// another chapter (it can only be read once displayed).
+  Future<String?> extractPageSpeechText(int ahead) async {
+    final result = await _request('getPageSpeechText', [ahead]);
+    return result is String ? result : null;
+  }
+
   ///Given a percentage moves to the corresponding page
   ///Progress percentage should be between 0.0 and 1.0
   void toProgressPercentage(double progressPercent) {

@@ -15,8 +15,9 @@ mixin ReadAloudHost<T extends StatefulWidget> on State<T> {
 
   bool get readingAloud => readAloud?.active ?? false;
 
-  /// Asks to download the voice the first time, then reads from this page.
-  Future<void> startReadAloud() async {
+  /// Asks to download the voice the first time, then reads from this page
+  /// (from character [fromOffset] of its text, when given).
+  Future<void> startReadAloud({int? fromOffset}) async {
     if (!await ensureVoiceInstalled(context) || !mounted) return;
     final c = readAloud ??= ReadAloudController(
       source: createNarrationSource(),
@@ -25,7 +26,7 @@ mixin ReadAloudHost<T extends StatefulWidget> on State<T> {
     )
       ..onNotice = _notice
       ..addListener(_onReadAloudChanged);
-    await c.start();
+    await c.start(fromOffset: fromOffset);
   }
 
   void _notice(String message) {
@@ -171,21 +172,44 @@ class ReadAloudBar extends StatelessWidget {
 
 Future<void> showVoiceSheet(BuildContext context,
     {required ReaderPrefs prefs, ReadAloudController? controller}) async {
+  // Grouped by accent: American, British, Indian.
+  final groups = <String, List<Voice>>{};
+  for (final v in voices) {
+    groups.putIfAbsent(v.description.split(', ').last, () => []).add(v);
+  }
   final v = await showModalBottomSheet<Voice>(
     context: context,
     showDragHandle: true,
-    builder: (c) => SafeArea(
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Text('Voice', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 8),
-        for (final voice in voices)
-          ListTile(
-            leading: const Icon(Icons.record_voice_over_outlined),
-            title: Text(voice.name, style: const TextStyle(fontSize: 18)),
-            subtitle: Text(voice.description),
-            trailing: voice.id == prefs.ttsVoice ? const Icon(Icons.check_rounded) : null,
-            onTap: () => Navigator.pop(c, voice),
+    isScrollControlled: true,
+    builder: (c) => DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.75,
+      maxChildSize: 0.95,
+      builder: (c, scroll) => ListView(controller: scroll, children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(24, 0, 24, 4),
+          child: Text('Voice', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+        ),
+        for (final g in groups.entries) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 14, 24, 2),
+            child: Text(g.key,
+                style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: Theme.of(c).colorScheme.primary)),
           ),
+          for (final voice in g.value)
+            ListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+              leading: const Icon(Icons.record_voice_over_outlined),
+              title: Text(voice.name, style: const TextStyle(fontSize: 18)),
+              subtitle: Text(voice.description.split(', ').first),
+              trailing: voice.id == prefs.ttsVoice ? const Icon(Icons.check_rounded) : null,
+              onTap: () => Navigator.pop(c, voice),
+            ),
+        ],
+        const SizedBox(height: 16),
       ]),
     ),
   );
@@ -198,17 +222,22 @@ Future<void> showVoiceSheet(BuildContext context,
 /// download. Returns true when it is ready to use.
 Future<bool> ensureVoiceInstalled(BuildContext context) async {
   if (await VoiceModel.instance.isInstalled()) return true;
+  final upgrade = await VoiceModel.instance.hasOlderVoice();
   if (!context.mounted) return false;
   final ok = await showDialog<bool>(
     context: context,
     builder: (c) => AlertDialog(
       icon: const Icon(Icons.headphones_rounded),
-      title: const Text('Download the reading voice?'),
-      content: const Text(
-          'Paperlight reads aloud with a natural voice that runs on this tablet, '
-          'so it works offline and your books stay private.\n\n'
-          'The voice is a one-time download of about ${VoiceModel.downloadMb} MB. '
-          'Wi-Fi is best.'),
+      title: Text(upgrade ? 'Get the new voices?' : 'Download the reading voice?'),
+      content: Text(upgrade
+          ? 'Read aloud now has more natural voices, including Indian, British '
+              'and American narrators.\n\n'
+              'They replace the old voice: a one-time download of about '
+              '${VoiceModel.downloadMb} MB. Wi-Fi is best.'
+          : 'Paperlight reads aloud with natural voices that run on this device, '
+              'so it works offline and your books stay private.\n\n'
+              'The voices are a one-time download of about ${VoiceModel.downloadMb} MB. '
+              'Wi-Fi is best.'),
       actions: [
         TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Not now')),
         FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Download')),

@@ -9,8 +9,10 @@ A calm, Kindle-style reader for PDF and EPUB books, made for a Samsung Galaxy Ta
   Swipes and taps never turn the page, so you can't lose your place by
   accident. Tap anywhere for the menu. Your place is saved automatically.
 - **Read aloud.** Tap the headphones to hear the book from the current page in
-  a natural voice. Pages turn as it reads. The voice runs on the tablet
-  (offline, private) after a one-time download of about 100 MB.
+  a natural voice (American, British or Indian narrators). Pages turn as it
+  reads. To start somewhere else, long-press the words (PDF) or select them
+  (EPUB) and tap **Read from here**. The voices run on the device (offline,
+  private) after a one-time download of about 156 MB.
 - **Text & display (Aa).** Text size, font, line spacing, margins (EPUB),
   White / Sepia / Night pages, and in-app brightness.
 - **Light on battery.** Nothing runs in the background. Only visible pages are

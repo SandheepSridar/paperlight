@@ -66,6 +66,7 @@ class MarkMenu extends StatelessWidget {
     this.noteLabel = 'Note',
     this.onCopy,
     this.onRemove,
+    this.onReadAloud,
   });
 
   final ValueChanged<Color>? onColor;
@@ -75,6 +76,9 @@ class MarkMenu extends StatelessWidget {
   final String noteLabel;
   final VoidCallback? onCopy;
   final VoidCallback? onRemove;
+
+  /// Starts reading aloud from this point.
+  final VoidCallback? onReadAloud;
 
   @override
   Widget build(BuildContext context) {
@@ -111,6 +115,11 @@ class MarkMenu extends StatelessWidget {
             if (onCopy != null)
               _MenuAction(
                   icon: Icons.copy_rounded, label: 'Copy', onTap: onCopy!),
+            if (onReadAloud != null)
+              _MenuAction(
+                  icon: Icons.headphones_rounded,
+                  label: 'Read from here',
+                  onTap: onReadAloud!),
             if (onRemove != null)
               _MenuAction(
                   icon: Icons.delete_outline_rounded,

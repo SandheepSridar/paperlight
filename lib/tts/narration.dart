@@ -28,7 +28,9 @@ class NarratedPage {
   final String carry;
 }
 
-const sentencePause = Duration(milliseconds: 200);
+// Pauses added after each chunk. The voice's own silence at the ends of a
+// clip is trimmed first, so these are the whole gap you hear.
+const sentencePause = Duration(milliseconds: 250);
 const paragraphPause = Duration(milliseconds: 600);
 const headingPause = Duration(milliseconds: 1000);
 
@@ -238,6 +240,40 @@ const _abbreviations = {
 };
 
 final _boundary = RegExp(r'''[.!?]+["')\]]*\s+''');
+
+/// Finds [snippet] (e.g. words the reader selected) in [page], ignoring
+/// differences in spacing and line breaks. Returns its offset, or null.
+int? locateSnippet(String page, String snippet) {
+  final words = snippet.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).take(8).toList();
+  while (words.isNotEmpty) {
+    final m = RegExp(words.map(RegExp.escape).join(r'\s+')).firstMatch(page);
+    if (m != null) return m.start;
+    words.removeLast();
+  }
+  return null;
+}
+
+/// Where the sentence containing [offset] begins in raw page text: just
+/// after the previous sentence end or line break (used for "read from
+/// here").
+int sentenceStartBefore(String raw, int offset) {
+  offset = offset.clamp(0, raw.length);
+  var i = offset;
+  while (i > 0) {
+    final c = raw[i - 1];
+    if (c == '\n') break;
+    if ('.!?'.contains(c) && i < raw.length && RegExp(r'\s').hasMatch(raw[i])) {
+      // Not after an abbreviation like "Mr." or an initial.
+      final word = RegExp(r'([A-Za-z.]+)\.$').firstMatch(raw.substring(0, i))?[1]?.toLowerCase();
+      if (c != '.' || word == null || (!_abbreviations.contains(word) && word.length > 1)) break;
+    }
+    i--;
+  }
+  while (i < raw.length && RegExp(r'\s').hasMatch(raw[i])) {
+    i++;
+  }
+  return i > offset ? offset : i;
+}
 
 /// Splits a paragraph into sentences without breaking on abbreviations
 /// ("Mr.", "e.g."), initials ("J. R. Tolkien") or decimals ("3.5").

@@ -2427,6 +2427,39 @@ function getCurrentPageText() {
 // Awaited via callAsync.
 function getCurrentPageSpeechText() {
   var cfiRange = makeRangeCfi(rendition.location.start.cfi, rendition.location.end.cfi);
+  return _speechTextOfCfiRange(cfiRange);
+}
+
+// Paperlight: speech text of the page `ahead` pages after the one on screen,
+// without turning to it, so the narrator can prepare it in advance. Works
+// within the chapter on screen; returns null for a page in another chapter
+// (those are only laid out once displayed). Awaited via callAsync.
+function getPageSpeechText(ahead) {
+  if (!ahead) return getCurrentPageSpeechText();
+  try {
+    var mgr = rendition.manager;
+    var views = mgr.visible();
+    if (!views || !views.length) return Promise.resolve(null);
+    var view = views[0];
+    var container = mgr.container.getBoundingClientRect();
+    var offset = container.left + (mgr.settings.fullsize ? window.scrollX : 0);
+    var position = view.position();
+    var width = view.width();
+    var pageWidth = mgr.layout.delta || mgr.layout.width;
+    var start = offset - position.left + ahead * pageWidth;
+    if (mgr.settings.direction === 'rtl' || start >= width - 1) {
+      return Promise.resolve(null);
+    }
+    var end = Math.min(start + mgr.layout.width, width);
+    var mapping = mgr.mapping.page(view.contents, view.section.cfiBase, start, end);
+    if (!mapping || !mapping.start || !mapping.end) return Promise.resolve(null);
+    return _speechTextOfCfiRange(makeRangeCfi(mapping.start, mapping.end));
+  } catch (e) {
+    return Promise.resolve(null);
+  }
+}
+
+function _speechTextOfCfiRange(cfiRange) {
   return book.getRange(cfiRange).then(function (range) {
     if (!range) return '';
     var BLOCK = /^(P|DIV|H[1-6]|LI|BLOCKQUOTE|PRE|TR|TD|TH|DT|DD|SECTION|ARTICLE|HEADER|FOOTER|ASIDE|FIGCAPTION|UL|OL|TABLE|HR)$/;

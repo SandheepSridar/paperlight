@@ -157,4 +157,30 @@ void main() {
       expect(p.utterances, isEmpty);
     });
   });
+
+  group('sentenceStartBefore', () {
+    const text = 'He opened the door. Mr. Smith waited outside.\nThe street was quiet.';
+    test('backs up to the start of the sentence', () {
+      final at = text.indexOf('waited');
+      expect(text.substring(sentenceStartBefore(text, at)), startsWith('Mr. Smith waited'));
+    });
+    test('a line break also starts a sentence', () {
+      final at = text.indexOf('quiet');
+      expect(text.substring(sentenceStartBefore(text, at)), startsWith('The street'));
+    });
+    test('the first sentence starts at 0', () {
+      expect(sentenceStartBefore(text, 5), 0);
+    });
+  });
+
+  group('locateSnippet', () {
+    test('finds words across line breaks and spacing', () {
+      const page = 'The hallway smelt of boiled\ncabbage and old rag mats.';
+      expect(locateSnippet(page, 'boiled  cabbage and'), page.indexOf('boiled'));
+    });
+    test('falls back to fewer words, or null', () {
+      expect(locateSnippet('one two three', 'two three four'), 4);
+      expect(locateSnippet('one two three', 'zebra'), isNull);
+    });
+  });
 }

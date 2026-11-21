@@ -14,5 +14,8 @@ Copied from pub.dev and patched for Paperlight annotations:
 - Read aloud: `getCurrentPageSpeechText()` in `epubView.js` and
   `EpubController.extractCurrentPageSpeechText()` return the page's text with a line
   break between block elements, without footnote markers.
+  `getPageSpeechText(ahead)` / `extractPageSpeechText(ahead)` do the same for a later
+  page of the chapter on screen (via the view manager's column mapping), so speech
+  for the next page can be prepared before turning.
 
 To upgrade: copy the new release over this folder and re-apply these patches.

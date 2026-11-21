@@ -72,7 +72,7 @@ class ReaderPrefs extends ChangeNotifier {
   }
 
   /// Read-aloud narrator (see `voices` in lib/tts/voice_engine.dart).
-  String get ttsVoice => _sp.getString('ttsVoice') ?? 'bella';
+  String get ttsVoice => _sp.getString('ttsVoice') ?? 'heart';
   set ttsVoice(String v) {
     _sp.setString('ttsVoice', v);
     notifyListeners();

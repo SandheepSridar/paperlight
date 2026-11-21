@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import '../../app/prefs.dart';
@@ -47,6 +48,11 @@ class _PdfReaderScreenState extends State<PdfReaderScreen>
   final _viewer = PdfViewerController();
 
   PdfMode? _mode;
+
+  // Long-press "Read from here": the page, the character pressed, and where
+  // to show the menu (in the reader's Stack).
+  ({int page, int offset, Offset at})? _readHere;
+  final _stackKey = GlobalKey();
 
   // Ink and page notes.
   late final InkController _ink =
@@ -109,6 +115,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen>
 
   void _onPage(int page) {
     if (page == _page) return;
+    _readHere = null;
     setState(() => _page = page);
     _save.run(() => widget.repo.saveProgress(widget.book.id,
         location: '$page', progress: _progress));
@@ -143,8 +150,65 @@ class _PdfReaderScreenState extends State<PdfReaderScreen>
   /// Pages only turn with the arrows; a tap anywhere shows/hides controls.
   void _onTap(TapUpDetails d) {
     if (_penMode || _ink.stylusBusy.value) return;
+    if (_readHere != null) return setState(() => _readHere = null);
     setState(() => _chrome = !_chrome);
   }
+
+  /// Long-press on a page: offer to read aloud from the words pressed.
+  Future<void> _onLongPress(int page, Offset local, Size box, Offset global) async {
+    final doc = _doc;
+    if (doc == null || _penMode || box.isEmpty) return;
+    final pg = doc.pages[page - 1];
+    PdfPageRawText? text;
+    try {
+      text = await pg.loadText();
+    } catch (_) {}
+    if (!mounted || text == null || text.fullText.trim().isEmpty) return;
+    // Page coordinates: origin bottom-left, y pointing up.
+    final x = local.dx / box.width * pg.width;
+    final y = pg.height - local.dy / box.height * pg.height;
+    var best = -1;
+    var bestD = double.infinity;
+    final n = text.charRects.length < text.fullText.length
+        ? text.charRects.length
+        : text.fullText.length;
+    for (var i = 0; i < n; i++) {
+      final r = text.charRects[i];
+      if (r.isEmpty || text.fullText[i].trim().isEmpty) continue;
+      final dx = x < r.left ? r.left - x : (x > r.right ? x - r.right : 0.0);
+      final dy = y < r.bottom ? r.bottom - y : (y > r.top ? y - r.top : 0.0);
+      final d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    if (best < 0) return;
+    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _chrome = false;
+      _readHere = (page: page, offset: best, at: stack?.globalToLocal(global) ?? global);
+    });
+  }
+
+  Future<void> _readFromHere() async {
+    final r = _readHere;
+    if (r == null) return;
+    setState(() => _readHere = null);
+    if (r.page != _page) _goTo(r.page);
+    await startReadAloud(fromOffset: r.offset);
+  }
+
+  /// Lets a page (in either mode) be long-pressed for "Read from here".
+  Widget _pressable(int page, Widget child) => LayoutBuilder(
+        builder: (context, box) => GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onLongPressStart: (d) =>
+              _onLongPress(page, d.localPosition, box.biggest, d.globalPosition),
+          child: child,
+        ),
+      );
 
   /// The ‹ › arrows: works in both "Turn pages" and "Scroll down" modes.
   void _arrow(int delta) {
@@ -290,8 +354,15 @@ class _PdfReaderScreenState extends State<PdfReaderScreen>
           canPrev: _page > 1,
           canNext: _page < _count,
           showArrows: !_penMode,
-          child: Stack(children: [
+          child: Stack(key: _stackKey, children: [
             Positioned.fill(child: _body(theme)),
+            if (_readHere case final r?)
+              Positioned.fill(
+                child: AnchoredMenu(
+                  anchor: Rect.fromCenter(center: r.at, width: 40, height: 40),
+                  child: MarkMenu(onReadAloud: _readFromHere),
+                ),
+              ),
             readAloudBar(chromeVisible: _chrome, hidden: _penMode),
             if (_penMode)
               Positioned(
@@ -399,11 +470,14 @@ class _PdfReaderScreenState extends State<PdfReaderScreen>
     return Center(
       child: AspectRatio(
         aspectRatio: pg.width / pg.height,
-        child: Stack(fit: StackFit.expand, children: [
-          image,
-          InkLayer(page: number, controller: _ink, night: night),
-          _NoteBadge(ink: _ink, page: number, onTap: () => _editPageNote(number)),
-        ]),
+        child: _pressable(
+          number,
+          Stack(fit: StackFit.expand, children: [
+            image,
+            InkLayer(page: number, controller: _ink, night: night),
+            _NoteBadge(ink: _ink, page: number, onTap: () => _editPageNote(number)),
+          ]),
+        ),
       ),
     );
   }
@@ -421,10 +495,15 @@ class _PdfReaderScreenState extends State<PdfReaderScreen>
         onPageChanged: (n) => n == null ? null : _onPage(n),
         onGeneralTap: (ctx, c, d) {
           if (d.type != PdfViewerGeneralTapType.tap) return false;
+          if (_readHere != null) {
+            setState(() => _readHere = null);
+            return true;
+          }
           setState(() => _chrome = !_chrome);
           return true;
         },
         pageOverlaysBuilder: (ctx, rect, page) => [
+          Positioned.fill(child: _pressable(page.pageNumber, const SizedBox.expand())),
           Positioned.fill(
             child: InkLayer(
                 page: page.pageNumber,
@@ -450,8 +529,6 @@ class _PdfNarration implements NarrationSource {
 
   @override
   bool get pdf => true;
-  @override
-  bool get canPeek => true;
 
   @override
   Future<String?> pageText(int ahead) async {
