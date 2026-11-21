@@ -202,6 +202,13 @@ class EpubController {
     return EpubTextExtractRes.fromJson(Utils.asStringMap(result));
   }
 
+  /// Paperlight: text of the current page for reading aloud, with a line
+  /// break between paragraphs and headings.
+  Future<String> extractCurrentPageSpeechText() async {
+    final result = await _request('getCurrentPageSpeechText');
+    return result is String ? result : '';
+  }
+
   ///Given a percentage moves to the corresponding page
   ///Progress percentage should be between 0.0 and 1.0
   void toProgressPercentage(double progressPercent) {

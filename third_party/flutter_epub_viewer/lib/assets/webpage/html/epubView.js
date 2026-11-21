@@ -129,6 +129,8 @@ function loadBook(data, opts) {
   var allowScriptedContent = opts.allowScriptedContent;
   var direction = opts.direction;
   var useCustomSwipe = opts.useCustomSwipe;
+  // Paperlight: pages turn only with the app's arrow buttons.
+  var disableSwipe = !!opts.disableSwipe;
   var backgroundColor = opts.backgroundColor;
   var foregroundColor = opts.foregroundColor;
   var fontSize = opts.fontSize;
@@ -1462,6 +1464,18 @@ function loadBook(data, opts) {
         if (e.touches && e.touches.length > 0) {
           currentTouchX = e.touches[0].clientX;
           currentTouchY = e.touches[0].clientY;
+          // Paperlight: with swipes disabled, a horizontal drag must not
+          // scroll the paginated container to another page.
+          if (disableSwipe && touchStartX !== null) {
+            var dx = Math.abs(currentTouchX - touchStartX);
+            var dy = Math.abs(currentTouchY - touchStartY);
+            if (dx > 10 && dx > dy) {
+              hasMoved = true;
+              e.preventDefault();
+              e.stopPropagation();
+              return false;
+            }
+          }
         }
       }
     }, { capture: true, passive: false }); // Use options object with passive: false
@@ -1561,6 +1575,10 @@ function loadBook(data, opts) {
 
       if (el) {
         detectSwipe(el, function (el, direction) {
+          // Paperlight: swipes never turn pages when disabled.
+          if (disableSwipe) {
+            return;
+          }
           // Block swipes if there's an active selection
           if (hasActiveSelection()) {
             return;
@@ -2400,6 +2418,43 @@ function _extractText(cfiRange) {
 function getCurrentPageText() {
   var cfiRange = makeRangeCfi(rendition.location.start.cfi, rendition.location.end.cfi);
   return _extractText(cfiRange);
+}
+
+// Paperlight: text of the current page for reading aloud, with a line break
+// between block elements (paragraphs, headings, list items) so the narrator
+// can pause between them. range.toString() would run them together.
+// Footnote reference markers and ruby annotations are left out.
+// Awaited via callAsync.
+function getCurrentPageSpeechText() {
+  var cfiRange = makeRangeCfi(rendition.location.start.cfi, rendition.location.end.cfi);
+  return book.getRange(cfiRange).then(function (range) {
+    if (!range) return '';
+    var BLOCK = /^(P|DIV|H[1-6]|LI|BLOCKQUOTE|PRE|TR|TD|TH|DT|DD|SECTION|ARTICLE|HEADER|FOOTER|ASIDE|FIGCAPTION|UL|OL|TABLE|HR)$/;
+    var out = [];
+    function walk(node) {
+      if (node.nodeType === 3) {
+        out.push(node.nodeValue.replace(/\s+/g, ' '));
+        return;
+      }
+      if (node.nodeType !== 1 && node.nodeType !== 11) return;
+      var tag = node.nodeName ? String(node.nodeName).toUpperCase() : '';
+      if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'RT' || tag === 'RP') return;
+      if (tag === 'SUP' && /^\s*[\d*\u2020\u2021\[\]]+\s*$/.test(node.textContent || '')) return;
+      if (tag === 'A' && /noteref/.test(node.getAttribute && (node.getAttribute('epub:type') || '') || '')) return;
+      if (tag === 'BR') {
+        out.push('\n');
+        return;
+      }
+      var block = BLOCK.test(tag);
+      if (block) out.push('\n');
+      for (var c = node.firstChild; c; c = c.nextSibling) walk(c);
+      if (block) out.push('\n');
+    }
+    walk(range.cloneContents());
+    return out.join('').replace(/[ \t]*\n[ \t]*/g, '\n').replace(/\n{2,}/g, '\n').trim();
+  }).catch(function () {
+    return '';
+  });
 }
 
 //get text from a range; awaited via callAsync

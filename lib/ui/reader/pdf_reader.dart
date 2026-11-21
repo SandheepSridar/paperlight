@@ -5,10 +5,12 @@ import '../../app/prefs.dart';
 import '../../app/theme.dart';
 import '../../data/library_repo.dart';
 import '../../data/models.dart';
+import '../../tts/read_aloud_controller.dart';
 import 'annotation_menus.dart';
 import 'ink/ink_controller.dart';
 import 'ink/ink_layer.dart';
 import 'ink/ink_toolbar.dart';
+import 'read_aloud_bar.dart';
 import 'reader_chrome.dart';
 import 'reader_session.dart';
 import 'reader_sheets.dart';
@@ -24,7 +26,8 @@ class PdfReaderScreen extends StatefulWidget {
   State<PdfReaderScreen> createState() => _PdfReaderScreenState();
 }
 
-class _PdfReaderScreenState extends State<PdfReaderScreen> {
+class _PdfReaderScreenState extends State<PdfReaderScreen>
+    with ReadAloudHost<PdfReaderScreen> {
   late final ReaderSession _session = ReaderSession(widget.prefs);
   final _save = Debouncer(const Duration(milliseconds: 700));
   late final AppLifecycleListener _life;
@@ -73,12 +76,15 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   void _flushAll() {
+    // No background playback: reading aloud pauses when the app is left.
+    pauseReadAloud();
     _save.flush();
     _ink.flush();
   }
 
   @override
   void dispose() {
+    disposeReadAloud();
     _save.flush();
     final ink = _ink;
     ink.flush().whenComplete(ink.dispose);
@@ -108,6 +114,13 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         location: '$page', progress: _progress));
   }
 
+  /// A jump the reader asked for (contents, bookmark, slider): reading
+  /// aloud carries on from the new page.
+  void _jump(int page) {
+    _goTo(page);
+    readAloudFollow();
+  }
+
   void _goTo(int page) {
     page = page.clamp(1, _count);
     if (_mode == PdfMode.pages) {
@@ -127,19 +140,23 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
   }
 
-  /// Left third = back, right third = forward, middle = show/hide controls.
+  /// Pages only turn with the arrows; a tap anywhere shows/hides controls.
   void _onTap(TapUpDetails d) {
     if (_penMode || _ink.stylusBusy.value) return;
-    final w = context.size?.width ?? 1;
-    final x = d.localPosition.dx / w;
-    if (_chrome) {
-      setState(() => _chrome = false);
-    } else if (x < 0.3 && !_zoomed) {
-      _turn(-1);
-    } else if (x > 0.7 && !_zoomed) {
-      _turn(1);
+    setState(() => _chrome = !_chrome);
+  }
+
+  /// The ‹ › arrows: works in both "Turn pages" and "Scroll down" modes.
+  void _arrow(int delta) {
+    if (readingAloud) {
+      // Jump (no animation) so the narrator starts on the right page.
+      final target = _page + delta;
+      if (target >= 1 && target <= _count) _jump(target);
+    } else if (_mode == PdfMode.pages) {
+      _turn(delta);
     } else {
-      setState(() => _chrome = true);
+      final target = _page + delta;
+      if (target >= 1 && target <= _count) _goTo(target);
     }
   }
 
@@ -169,7 +186,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       for (final n in nodes) {
         final dest = n.dest;
         if (dest != null) {
-          entries.add(TocEntry(n.title, depth, () => _goTo(dest.pageNumber)));
+          entries.add(TocEntry(n.title, depth, () => _jump(dest.pageNumber)));
         }
         walk(n.children, depth + 1);
       }
@@ -182,6 +199,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   void _startPen() {
+    pauseReadAloud();
     if (widget.prefs.pdfMode != PdfMode.pages) {
       widget.prefs.pdfMode = PdfMode.pages;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -194,6 +212,13 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _chrome = false;
     });
   }
+
+  @override
+  ReaderPrefs get hostPrefs => widget.prefs;
+  @override
+  ReaderSession get hostSession => _session;
+  @override
+  NarrationSource createNarrationSource() => _PdfNarration(this);
 
   void _endPen() {
     _ink.penMode = false;
@@ -214,7 +239,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     showMarksSheet(context,
         isPdf: true,
         loadBookmarks: () => widget.repo.bookmarks(widget.book.id),
-        onOpenBookmark: (b) => _goTo(int.parse(b.location)),
+        onOpenBookmark: (b) => _jump(int.parse(b.location)),
         onDeleteBookmark: (b) async {
           await widget.repo.deleteBookmark(b.id!);
           await _loadMarks();
@@ -223,7 +248,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           await _ink.flush();
           return widget.repo.annotations(widget.book.id);
         },
-        onOpenAnnotation: (a) => _goTo(int.tryParse(a.location) ?? _page),
+        onOpenAnnotation: (a) => _jump(int.tryParse(a.location) ?? _page),
         onDeleteAnnotation: (a) async {
           await widget.repo.deleteAnnotation(a.id!);
           _ink.forget(a);
@@ -246,16 +271,28 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           bookmarked: _marked.contains('$_page'),
           seekDivisions: _count > 1 ? _count - 1 : null,
           seekLabel: (v) => 'Page ${(v * (_count - 1)).round() + 1}',
-          onSeek: (v) => _goTo((v * (_count - 1)).round() + 1),
+          onSeek: (v) => _jump((v * (_count - 1)).round() + 1),
           onBack: () => Navigator.pop(context),
           onContents: _contents,
           onBookmarks: _openMarks,
           onPen: _doc == null ? null : _startPen,
+          onReadAloud: _doc == null
+              ? null
+              : () {
+                  setState(() => _chrome = false);
+                  startReadAloud();
+                },
           onToggleBookmark: _toggleBookmark,
           onSettings: () =>
               showDisplaySheet(context, prefs: widget.prefs, isEpub: false),
+          onPrev: _doc == null ? null : () => _arrow(-1),
+          onNext: _doc == null ? null : () => _arrow(1),
+          canPrev: _page > 1,
+          canNext: _page < _count,
+          showArrows: !_penMode,
           child: Stack(children: [
             Positioned.fill(child: _body(theme)),
+            readAloudBar(chromeVisible: _chrome, hidden: _penMode),
             if (_penMode)
               Positioned(
                 left: 12,
@@ -314,18 +351,14 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTapUp: _onTap,
-      child: ValueListenableBuilder<bool>(
-        valueListenable: _ink.stylusBusy,
-        builder: (context, stylusBusy, _) => PageView.builder(
+      child: PageView.builder(
           controller: _pages,
           // Keeps the neighbouring page rendered so page turns are instant,
           // without rendering the whole book.
           allowImplicitScrolling: true,
-          // No swiping while zoomed, while drawing with a finger, or while
-          // the S Pen is on the glass (a resting palm must not turn pages).
-          physics: _zoomed || _penMode || stylusBusy
-              ? const NeverScrollableScrollPhysics()
-              : const PageScrollPhysics(),
+          // Pages never turn by swiping, only with the ‹ › arrows, so a
+          // stray swipe or a resting palm can't lose the reader's place.
+          physics: const NeverScrollableScrollPhysics(),
           itemCount: doc.pages.length,
           onPageChanged: (i) {
             _zoom.value = Matrix4.identity();
@@ -349,7 +382,6 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
             );
           },
         ),
-      ),
     );
   }
 
@@ -407,6 +439,42 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         ],
       ),
     );
+  }
+}
+
+/// Gives the narrator the PDF's text, page by page.
+class _PdfNarration implements NarrationSource {
+  _PdfNarration(this.s);
+  final _PdfReaderScreenState s;
+  final _cache = <int, String>{};
+
+  @override
+  bool get pdf => true;
+  @override
+  bool get canPeek => true;
+
+  @override
+  Future<String?> pageText(int ahead) async {
+    final doc = s._doc;
+    final page = s._page + ahead;
+    if (doc == null || page < 1 || page > doc.pages.length) return null;
+    final cached = _cache[page];
+    if (cached != null) return cached;
+    String text;
+    try {
+      text = (await doc.pages[page - 1].loadText())?.fullText ?? '';
+    } catch (_) {
+      text = '';
+    }
+    if (_cache.length > 12) _cache.remove(_cache.keys.first);
+    return _cache[page] = text;
+  }
+
+  @override
+  Future<bool> turnNext() async {
+    if (!s.mounted || s._page >= s._count) return false;
+    s._goTo(s._page + 1);
+    return true;
   }
 }
 

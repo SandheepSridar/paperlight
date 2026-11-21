@@ -7,5 +7,12 @@ Copied from pub.dev and patched for Paperlight annotations:
 - `lib/assets/webpage/html/epubView.js` — `addHighlight` honours the opacity
   argument; `addUnderLine(cfi, color)` draws a coloured, opaque underline.
 - `lib/src/epub_controller.dart` — `addUnderline({cfi, color})`.
+- Swipe lock: `EpubDisplaySettings.disableSwipe` (`lib/src/models/epub_display_settings.dart`),
+  passed as `disableSwipe` by `lib/src/epub_viewer.dart`. In `epubView.js` it makes the
+  `detectSwipe` callback a no-op and blocks horizontal `touchmove` drags, so pages turn
+  only with Paperlight's arrow buttons. Taps, long-press and text selection are unaffected.
+- Read aloud: `getCurrentPageSpeechText()` in `epubView.js` and
+  `EpubController.extractCurrentPageSpeechText()` return the page's text with a line
+  break between block elements, without footnote markers.
 
 To upgrade: copy the new release over this folder and re-apply these patches.

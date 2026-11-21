@@ -23,6 +23,12 @@ class ReaderChrome extends StatelessWidget {
     this.seekDivisions,
     this.seekLabel,
     this.onPen,
+    this.onReadAloud,
+    this.onPrev,
+    this.onNext,
+    this.canPrev = true,
+    this.canNext = true,
+    this.showArrows = true,
   });
 
   final bool visible;
@@ -42,6 +48,16 @@ class ReaderChrome extends StatelessWidget {
 
   /// PDF only: opens the drawing toolbar.
   final VoidCallback? onPen;
+
+  /// Starts reading the book aloud from the current page.
+  final VoidCallback? onReadAloud;
+
+  /// Page-turn arrows. Pages only turn with these, never with swipes or taps.
+  final VoidCallback? onPrev;
+  final VoidCallback? onNext;
+  final bool canPrev;
+  final bool canNext;
+  final bool showArrows;
   final Widget child;
 
   @override
@@ -56,6 +72,14 @@ class ReaderChrome extends StatelessWidget {
 
     return Stack(children: [
       Positioned.fill(child: child),
+      if (showArrows && onPrev != null && onNext != null)
+        Positioned.fill(
+          child: PageArrows(
+            theme: theme,
+            onPrev: canPrev ? onPrev : null,
+            onNext: canNext ? onNext : null,
+          ),
+        ),
       // Small, always-visible progress hint at the bottom like Kindle.
       Positioned(
         left: 0,
@@ -106,6 +130,11 @@ class ReaderChrome extends StatelessWidget {
                       tooltip: 'Notes & marks',
                       icon: const Icon(Icons.bookmarks_outlined),
                       onPressed: onBookmarks),
+                  if (onReadAloud != null)
+                    IconButton(
+                        tooltip: 'Read aloud',
+                        icon: const Icon(Icons.headphones_rounded),
+                        onPressed: onReadAloud),
                   if (onPen != null)
                     IconButton(
                         tooltip: 'Draw on the page',
@@ -152,6 +181,61 @@ class ReaderChrome extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    ]);
+  }
+}
+
+/// Subtle ‹ › buttons at the left and right edges — the only way to turn a
+/// page, so a stray swipe or tap never loses the reader's place.
+class PageArrows extends StatelessWidget {
+  const PageArrows(
+      {super.key, required this.theme, required this.onPrev, required this.onNext});
+  final PageTheme theme;
+  final VoidCallback? onPrev;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget arrow(IconData icon, String tip, VoidCallback? onTap) {
+      return AnimatedOpacity(
+        opacity: onTap != null ? 0.55 : 0.15,
+        duration: const Duration(milliseconds: 150),
+        child: Material(
+          color: theme.background.withValues(alpha: 0.7),
+          shape: CircleBorder(
+              side: BorderSide(color: theme.foreground.withValues(alpha: 0.25))),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: Tooltip(
+              message: tip,
+              child: SizedBox(
+                width: 56,
+                height: 56,
+                child: Icon(icon, size: 34, color: theme.foreground),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final pad = MediaQuery.paddingOf(context);
+    return Stack(children: [
+      Positioned(
+        left: 4 + pad.left,
+        top: 0,
+        bottom: 0,
+        child: Center(
+            child: arrow(Icons.chevron_left_rounded, 'Previous page', onPrev)),
+      ),
+      Positioned(
+        right: 4 + pad.right,
+        top: 0,
+        bottom: 0,
+        child: Center(
+            child: arrow(Icons.chevron_right_rounded, 'Next page', onNext)),
       ),
     ]);
   }

@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../app/prefs.dart';
+import '../tts/voice_engine.dart';
 import '../update/updater.dart';
 import 'library_screen.dart' show showReaderTip;
+import 'reader/read_aloud_bar.dart' show showVoiceSheet, ensureVoiceInstalled;
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key, required this.prefs, required this.updater});
@@ -24,6 +26,7 @@ class SettingsScreen extends StatelessWidget {
             value: prefs.keepScreenOn,
             onChanged: (v) => prefs.keepScreenOn = v,
           ),
+          _VoiceTile(prefs: prefs),
           ListTile(
             leading: const Icon(Icons.help_outline_rounded),
             title: const Text('How to read'),
@@ -47,4 +50,68 @@ class SettingsScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Read-aloud voice: pick a narrator, download the voice, or remove it.
+class _VoiceTile extends StatefulWidget {
+  const _VoiceTile({required this.prefs});
+  final ReaderPrefs prefs;
+
+  @override
+  State<_VoiceTile> createState() => _VoiceTileState();
+}
+
+class _VoiceTileState extends State<_VoiceTile> {
+  late Future<bool> _installed = VoiceModel.instance.isInstalled();
+
+  void _refresh() => setState(() => _installed = VoiceModel.instance.isInstalled());
+
+  Future<void> _remove() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Remove the reading voice?'),
+        content: const Text('This frees about ${VoiceModel.installedMb} MB. '
+            'You can download it again the next time you use Read aloud.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Keep')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Remove')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await VoiceModel.instance.remove();
+    _refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<bool>(
+        future: _installed,
+        builder: (context, snap) {
+          final installed = snap.data ?? false;
+          final voice = voiceById(widget.prefs.ttsVoice);
+          return ListTile(
+            leading: const Icon(Icons.headphones_rounded),
+            title: const Text('Read-aloud voice'),
+            subtitle: Text(installed
+                ? '${voice.name} (${voice.description.toLowerCase()}) · on this tablet'
+                : 'Not downloaded yet (about ${VoiceModel.downloadMb} MB)'),
+            onTap: () async {
+              if (installed) {
+                await showVoiceSheet(context, prefs: widget.prefs);
+              } else {
+                await ensureVoiceInstalled(context);
+                _refresh();
+              }
+            },
+            trailing: installed
+                ? IconButton(
+                    tooltip: 'Remove voice',
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    onPressed: _remove,
+                  )
+                : null,
+          );
+        },
+      );
 }

@@ -27,6 +27,14 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // Compress native libraries in the APK. The read-aloud voice engine
+    // (onnxruntime) is large, and the APK is downloaded by the self-updater.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     defaultConfig {
         applicationId = "com.sandheep.paperlight"
         // You can update the following values to match your application needs.

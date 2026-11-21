@@ -404,9 +404,9 @@ Future<void> showReaderTip(BuildContext context) => showDialog(
       builder: (c) => AlertDialog(
         title: const Text('How to read'),
         content: const Column(mainAxisSize: MainAxisSize.min, children: [
-          _TipRow(Icons.touch_app_rounded, 'Tap the right side (or swipe left) for the next page.'),
-          _TipRow(Icons.undo_rounded, 'Tap the left side to go back a page.'),
-          _TipRow(Icons.menu_rounded, 'Tap the middle to show the menu: text size, colours, bookmarks and contents.'),
+          _TipRow(Icons.chevron_right_rounded, 'Use the › and ‹ arrows at the edges of the page to turn pages. Swiping and tapping never turn the page, so you won\'t lose your place.'),
+          _TipRow(Icons.menu_rounded, 'Tap anywhere on the page to show the menu: text size, colours, bookmarks and contents.'),
+          _TipRow(Icons.headphones_rounded, 'Tap the headphones in the menu to have the book read aloud from this page.'),
           _TipRow(Icons.border_color_rounded, 'Books: press and hold a word, drag to choose more, then pick a colour to highlight or add a note.'),
           _TipRow(Icons.draw_rounded, 'PDFs: write on the page with your S Pen, or tap the pen button in the menu to draw with your finger.'),
           _TipRow(Icons.save_rounded, 'Your place and your marks are saved automatically.'),

@@ -71,8 +71,22 @@ class ReaderPrefs extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool get seenReaderTip => _sp.getBool('seenReaderTip_v1_1') ?? false;
-  set seenReaderTip(bool v) => _sp.setBool('seenReaderTip_v1_1', v);
+  /// Read-aloud narrator (see `voices` in lib/tts/voice_engine.dart).
+  String get ttsVoice => _sp.getString('ttsVoice') ?? 'bella';
+  set ttsVoice(String v) {
+    _sp.setString('ttsVoice', v);
+    notifyListeners();
+  }
+
+  static const ttsSpeeds = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3];
+  double get ttsSpeed => _sp.getDouble('ttsSpeed') ?? 1.0;
+  set ttsSpeed(double v) {
+    _sp.setDouble('ttsSpeed', v);
+    notifyListeners();
+  }
+
+  bool get seenReaderTip => _sp.getBool('seenReaderTip_v1_2') ?? false;
+  set seenReaderTip(bool v) => _sp.setBool('seenReaderTip_v1_2', v);
 
   DateTime? get lastUpdateCheck {
     final ms = _sp.getInt('lastUpdateCheck');

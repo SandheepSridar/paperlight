@@ -31,6 +31,10 @@ class EpubDisplaySettings {
   /// **Warning:** Using this animation will break `onRelocated` callback
   final bool useSnapAnimationAndroid;
 
+  /// Paperlight: when true, swiping never turns pages (the app provides
+  /// explicit page-turn buttons instead).
+  final bool disableSwipe;
+
   /// Theme of the reader, by default it uses the book theme
   final EpubTheme? theme;
 
@@ -42,6 +46,7 @@ class EpubDisplaySettings {
     this.defaultDirection = EpubDefaultDirection.ltr,
     this.snap = true,
     this.useSnapAnimationAndroid = false,
+    this.disableSwipe = false,
     this.manager = EpubManager.continuous,
     this.theme,
   });
@@ -58,6 +63,7 @@ class EpubDisplaySettings {
         snap: json['snap'] as bool? ?? true,
         useSnapAnimationAndroid:
             json['useSnapAnimationAndroid'] as bool? ?? false,
+        disableSwipe: json['disableSwipe'] as bool? ?? false,
         manager: EpubManager.values.asNameMap()[json['manager']] ??
             EpubManager.continuous,
         theme: json['theme'] == null
@@ -74,6 +80,7 @@ class EpubDisplaySettings {
         'manager': manager.name,
         'snap': snap,
         'useSnapAnimationAndroid': useSnapAnimationAndroid,
+        'disableSwipe': disableSwipe,
         if (theme != null) 'theme': theme!.toJson(),
       };
 }

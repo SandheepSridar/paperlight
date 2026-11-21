@@ -630,6 +630,7 @@ class _EpubViewerState extends State<EpubViewer> {
         'allowScriptedContent': allowScripted,
         'direction': direction,
         'useCustomSwipe': useCustomSwipe,
+        'disableSwipe': displaySettings.disableSwipe,
         'backgroundColor': null,
         'foregroundColor': foregroundColor,
         'fontSize': fontSize,

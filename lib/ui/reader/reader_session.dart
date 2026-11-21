@@ -10,6 +10,9 @@ class ReaderSession {
   ReaderSession(this.prefs);
   final ReaderPrefs prefs;
 
+  /// Keeps the screen on regardless of the preference (while reading aloud).
+  bool keepAwake = false;
+
   void begin() {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     apply();
@@ -24,7 +27,9 @@ class ReaderSession {
           : ScreenBrightness.instance.setApplicationScreenBrightness(b);
     } catch (_) {}
     try {
-      prefs.keepScreenOn ? WakelockPlus.enable() : WakelockPlus.disable();
+      prefs.keepScreenOn || keepAwake
+          ? WakelockPlus.enable()
+          : WakelockPlus.disable();
     } catch (_) {}
   }
 

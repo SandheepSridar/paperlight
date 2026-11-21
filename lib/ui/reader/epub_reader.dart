@@ -9,7 +9,9 @@ import '../../app/prefs.dart';
 import '../../app/theme.dart';
 import '../../data/library_repo.dart';
 import '../../data/models.dart';
+import '../../tts/read_aloud_controller.dart';
 import 'annotation_menus.dart';
+import 'read_aloud_bar.dart';
 import 'reader_chrome.dart';
 import 'reader_session.dart';
 import 'reader_sheets.dart';
@@ -25,7 +27,8 @@ class EpubReaderScreen extends StatefulWidget {
   State<EpubReaderScreen> createState() => _EpubReaderScreenState();
 }
 
-class _EpubReaderScreenState extends State<EpubReaderScreen> {
+class _EpubReaderScreenState extends State<EpubReaderScreen>
+    with ReadAloudHost<EpubReaderScreen> {
   late final ReaderSession _session = ReaderSession(widget.prefs);
   final _controller = EpubController();
   final _save = Debouncer(const Duration(milliseconds: 700));
@@ -68,12 +71,15 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
   final _stackKey = GlobalKey();
   final _viewerKey = GlobalKey();
 
+  /// Completes when epub.js reports the next relocation (see [_navigate]).
+  Completer<void>? _relocation;
+
   @override
   void initState() {
     super.initState();
     _session.begin();
     widget.prefs.addListener(_onPrefs);
-    _life = AppLifecycleListener(onPause: _save.flush, onHide: _save.flush);
+    _life = AppLifecycleListener(onPause: _leave, onHide: _leave);
     widget.repo.markOpened(widget.book.id);
     _loadMarks();
     widget.repo.annotations(widget.book.id).then((a) {
@@ -86,8 +92,22 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
     });
   }
 
+  /// No background playback: reading aloud pauses when the app is left.
+  void _leave() {
+    pauseReadAloud();
+    _save.flush();
+  }
+
+  @override
+  ReaderPrefs get hostPrefs => widget.prefs;
+  @override
+  ReaderSession get hostSession => _session;
+  @override
+  NarrationSource createNarrationSource() => _EpubNarration(this);
+
   @override
   void dispose() {
+    disposeReadAloud();
     _save.flush();
     _pendingTap?.cancel();
     _life.dispose();
@@ -383,6 +403,8 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
       // last known value rather than resetting the library's progress bar.
       if (_locationsReady || loc.progress > 0) _progress = loc.progress;
     });
+    final r = _relocation;
+    if (r != null && !r.isCompleted) r.complete();
     if (!_settled) return;
     final cfi = loc.startCfi;
     final progress = _progress;
@@ -402,7 +424,7 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
     if (d == null || at == null) return;
     final still = (Offset(x, y) - d).distance < 0.03;
     final quick = DateTime.now().difference(at) < const Duration(milliseconds: 350);
-    if (!still || !quick) return; // swipe (handled by epub.js) or long-press select
+    if (!still || !quick) return; // drag (ignored) or long-press select
     final markTap = _markTapAt;
     if (markTap != null &&
         DateTime.now().difference(markTap) < const Duration(milliseconds: 600)) {
@@ -421,19 +443,44 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
     }
   }
 
+  /// Pages only turn with the arrows; a tap anywhere shows/hides controls.
   void _tap(double x) {
     if (!mounted) return;
-    if (_chrome) {
-      setState(() => _chrome = false);
-    } else if (x < 0.3) {
+    setState(() => _chrome = !_chrome);
+  }
+
+  /// The ‹ › arrows.
+  void _turn(int delta) {
+    if (!_loaded) return;
+    _closeMenu();
+    _go(delta < 0 ? _controller.prev : _controller.next);
+  }
+
+  /// Moves somewhere the reader asked for. While reading aloud, the voice
+  /// carries on from the new page once it is on screen.
+  void _go(VoidCallback move) {
+    if (!readingAloud) {
       _settled = true;
-      _controller.prev();
-    } else if (x > 0.7) {
-      _settled = true;
-      _controller.next();
-    } else {
-      setState(() => _chrome = true);
+      move();
+      return;
     }
+    _navigate(move).then((_) => readAloudFollow());
+  }
+
+  /// Runs [move] and waits for the book to arrive there. Returns false if
+  /// the page didn't change (e.g. already at the end of the book).
+  Future<bool> _navigate(VoidCallback move) async {
+    final before = _cfi;
+    final done = _relocation = Completer<void>();
+    _settled = true;
+    move();
+    try {
+      await done.future.timeout(const Duration(seconds: 3));
+      // Let the page finish drawing before its text is read.
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+    } catch (_) {}
+    if (identical(_relocation, done)) _relocation = null;
+    return _cfi != before;
   }
 
   Future<void> _toggleBookmark() async {
@@ -468,10 +515,7 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
     void walk(List<EpubChapter> list, int depth) {
       for (final c in list) {
         entries.add(TocEntry(c.title.trim(), depth,
-            () {
-              _settled = true;
-              _controller.display(cfi: c.href);
-            }));
+            () => _go(() => _controller.display(cfi: c.href))));
         walk(c.subitems, depth + 1);
       }
     }
@@ -510,31 +554,34 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
         seekLabel: (v) => '${(v * 100).round()}%',
         onSeek: (v) {
           if (!_loaded) return;
-          _settled = true;
-          _controller.toProgressPercentage(v);
+          _go(() => _controller.toProgressPercentage(v));
         },
         onBack: () => Navigator.pop(context),
         onContents: _contents,
         onBookmarks: () => showMarksSheet(context,
             isPdf: false,
             loadBookmarks: () => widget.repo.bookmarks(widget.book.id),
-            onOpenBookmark: (b) {
-              _settled = true;
-              _controller.display(cfi: b.location);
-            },
+            onOpenBookmark: (b) =>
+                _go(() => _controller.display(cfi: b.location)),
             onDeleteBookmark: (b) async {
               await widget.repo.deleteBookmark(b.id!);
               await _loadMarks();
             },
             loadAnnotations: () async => List.of(_annotations)
               ..sort((a, b) => a.progress.compareTo(b.progress)),
-            onOpenAnnotation: (a) {
-              _settled = true;
-              _controller.display(cfi: a.location);
-            },
+            onOpenAnnotation: (a) =>
+                _go(() => _controller.display(cfi: a.location)),
             onDeleteAnnotation: _deleteMark),
         onToggleBookmark: _toggleBookmark,
+        onReadAloud: () {
+          if (!_loaded) return;
+          setState(() => _chrome = false);
+          startReadAloud();
+        },
         onSettings: () => showDisplaySheet(context, prefs: p, isEpub: true),
+        onPrev: () => _turn(-1),
+        onNext: () => _turn(1),
+        showArrows: _loaded && _error == null,
         child: _error != null
             ? Center(
                 child: Padding(
@@ -562,6 +609,7 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
                           displaySettings: EpubDisplaySettings(
                             flow: EpubFlow.paginated,
                             snap: true,
+                            disableSwipe: true,
                             spread: EpubSpread.none,
                             fontSize: _fontSize,
                             theme: _epubTheme(),
@@ -616,6 +664,7 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
                                 ),
                         ),
                       ),
+                    readAloudBar(chromeVisible: _chrome),
                     if (!_loaded)
                       Positioned.fill(
                         child: ColoredBox(
@@ -626,6 +675,34 @@ class _EpubReaderScreenState extends State<EpubReaderScreen> {
                   ]),
       ),
     );
+  }
+}
+
+/// Gives the narrator the text of the page on screen, turning pages as it
+/// goes (an EPUB page's text is only known once it has been laid out).
+class _EpubNarration implements NarrationSource {
+  _EpubNarration(this.s);
+  final _EpubReaderScreenState s;
+
+  @override
+  bool get pdf => false;
+  @override
+  bool get canPeek => false;
+
+  @override
+  Future<String?> pageText(int ahead) async {
+    if (ahead != 0 || !s.mounted || !s._loaded) return null;
+    try {
+      return await s._controller.extractCurrentPageSpeechText();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  @override
+  Future<bool> turnNext() async {
+    if (!s.mounted) return false;
+    return s._navigate(s._controller.next);
   }
 }
 
