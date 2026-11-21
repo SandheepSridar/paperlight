@@ -216,8 +216,6 @@ void _worker(List<Object?> args) {
         ),
         numThreads: Platform.numberOfProcessors >= 8 ? 4 : 2,
       ),
-      // Let the model see a couple of sentences at once for better flow.
-      maxNumSentences: 2,
       silenceScale: 0.25,
     ));
   } catch (e) {

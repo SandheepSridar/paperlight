@@ -225,8 +225,17 @@ class ReadAloudController extends ChangeNotifier {
     return _Item(Utterance(sentences.first, sentencePause), turnsBefore: item.turnsBefore);
   }
 
-  Future<Clip> _synth(_Item item) => VoiceEngine.instance.synthesize(item.u.text,
-      sid: voiceById(voiceId).sid, speed: speed, pauseAfter: item.u.pauseAfter);
+  /// Null when this one chunk couldn't be spoken; it is skipped.
+  Future<Clip?> _synth(_Item item) => VoiceEngine.instance
+      .synthesize(item.u.text,
+          sid: voiceById(voiceId).sid, speed: speed, pauseAfter: item.u.pauseAfter)
+      .then<Clip?>((c) => c, onError: (Object e) {
+    _lastFailure = e;
+    debugPrint('Read aloud: skipped "${item.u.text}": $e');
+    return null;
+  });
+
+  Object? _lastFailure;
 
   Future<void> _run(int g) async {
     bool alive() => g == _gen;
@@ -240,6 +249,7 @@ class ReadAloudController extends ChangeNotifier {
       }
       var cur = _quickFirst(_queue.removeFirst());
       var curClip = _synth(cur);
+      var failures = 0;
       while (alive()) {
         // Keep one page queued ahead when we can read ahead (PDF).
         if (_queue.isEmpty && source.canPeek) {
@@ -248,7 +258,6 @@ class ReadAloudController extends ChangeNotifier {
         }
         final next = _queue.isEmpty ? null : _queue.removeFirst();
         final nextClip = next == null ? null : _synth(next);
-        nextClip?.ignore();
 
         final clip = await curClip;
         if (!alive()) return;
@@ -256,8 +265,13 @@ class ReadAloudController extends ChangeNotifier {
           await source.turnNext();
           _peeked = (_peeked - 1).clamp(0, 1 << 30);
         }
-        await _play(clip, g);
-        if (!alive()) return;
+        if (clip != null) {
+          failures = 0;
+          await _play(clip, g);
+          if (!alive()) return;
+        } else if (++failures >= 3) {
+          throw Exception(_lastFailure ?? 'speech failed');
+        }
 
         if (next == null) {
           if (source.canPeek) break; // end of the book
@@ -275,7 +289,8 @@ class ReadAloudController extends ChangeNotifier {
     } catch (e) {
       if (!alive()) return;
       debugPrint('Read aloud failed: $e');
-      onNotice?.call('Reading aloud stopped because of a problem.');
+      final why = '$e'.replaceFirst('Exception: ', '');
+      onNotice?.call('Reading aloud stopped because of a problem ($why).');
       await stop();
     }
   }
